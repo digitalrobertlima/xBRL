@@ -1621,11 +1621,9 @@ contract DeployScriptTest is Test {
         vm.chainId(137);
         DeployPolygon s = new DeployPolygon();
         MockBRL m18 = new MockBRL("BRL", "BRL", 18);
-        MockBRL m6 = new MockBRL("BRL1", "BRL1", 6);
         vm.etch(s.BRZ(), address(m18).code);
         vm.etch(s.BRLA(), address(m18).code);
-        vm.etch(s.BRL1(), address(m6).code);
-        vm.etch(s.WBRL(), address(m18).code);
+        vm.etch(s.BRL1(), address(m18).code);
         vm.etch(s.WETH(), address(m18).code);
         vm.etch(s.WPOL(), address(m18).code);
         _feed(s.FEED_ETH_USD(), "ETH / USD", 2_500e8);
@@ -1633,7 +1631,7 @@ contract DeployScriptTest is Test {
         _feed(s.FEED_BRL_USD(), "BRL / USD", 0.18e8);
         vm.etch(s.FABRICA_V3(), address(new FabricaVazia()).code);
         DeployPolygon.Implantacao memory a = s.run();
-        assertEq(ReservaBRL(a.reserva).listaLastros().length, 4);
+        assertEq(ReservaBRL(a.reserva).listaLastros().length, 3);
         assertEq(CofreCripto(a.cofre).ativo(0).tetoDivida, 500e18);
         (uint256 preco, bool ok) = CofreCripto(a.cofre).precoBrl(0);
         assertTrue(ok);

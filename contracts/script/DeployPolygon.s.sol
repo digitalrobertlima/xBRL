@@ -92,7 +92,6 @@ contract DeployPolygon is Script {
     address public constant BRZ = 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc;
     address public constant BRLA = 0xE6A537a407488807F0bbeb0038B79004f19DDDFb;
     address public constant BRL1 = 0x5C067C80C00eCd2345b05E83A3e758eF799C40B5;
-    address public constant WBRL = 0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0;
     // Cripto do cofre e pools de conferência (Uniswap V3)
     address public constant WETH = 0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619;
     address public constant WPOL = 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270;
@@ -161,11 +160,10 @@ contract DeployPolygon is Script {
 
     function _lastros() internal returns (address[] memory lista) {
         if (block.chainid == POLYGON) {
-            lista = new address[](4);
+            lista = new address[](3);
             lista[0] = BRZ;
             lista[1] = BRLA;
             lista[2] = BRL1;
-            lista[3] = WBRL;
         } else {
             lista = new address[](1);
             lista[0] = _criar(type(BRLTeste).creationCode, "");
@@ -250,8 +248,8 @@ contract DeployPolygon is Script {
         _conferirFeed(FEED_POL_USD, "POL / USD", "MATIC / USD", 0.01e8, 10e8);
         _conferirFeed(FEED_BRL_USD, "BRL / USD", "", 0.08e8, 0.5e8);
         require(ERC20(WETH).decimals() == 18 && ERC20(WPOL).decimals() == 18, "cripto com casas inesperadas");
-        address[4] memory l = [BRZ, BRLA, BRL1, WBRL];
-        for (uint256 i = 0; i < 4; ++i) {
+        address[3] memory l = [BRZ, BRLA, BRL1];
+        for (uint256 i = 0; i < 3; ++i) {
             require(l[i].code.length != 0, "lastro sem codigo");
             require(ERC20(l[i]).decimals() <= 18, "lastro com casas invalidas");
             console2.log("Lastro", ERC20(l[i]).symbol(), ERC20(l[i]).decimals());

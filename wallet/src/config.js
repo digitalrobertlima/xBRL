@@ -32,8 +32,7 @@ export const REDES = {
     tokens: [
       { simbolo: "BRZ", nome: "BRZ (Transfero)", endereco: "0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc", decimais: 18, lastro: true },
       { simbolo: "BRLA", nome: "BRLA (Avenia)", endereco: "0xE6A537a407488807F0bbeb0038B79004f19DDDFb", decimais: 18, lastro: true },
-      { simbolo: "BRL1", nome: "BRL1", endereco: "0x5C067C80C00eCd2345b05E83A3e758eF799C40B5", decimais: 6, lastro: true },
-      { simbolo: "wBRL", nome: "wBRL", endereco: "0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0", decimais: 18, lastro: true },
+      { simbolo: "BRL1", nome: "BRL1", endereco: "0x5C067C80C00eCd2345b05E83A3e758eF799C40B5", decimais: 18, lastro: true },
       { simbolo: "WETH", nome: "Ether (WETH)", endereco: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimais: 18, cripto: true },
       { simbolo: "WPOL", nome: "POL embrulhado", endereco: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", decimais: 18, cripto: true },
       { simbolo: "USDC", nome: "USD Coin (nativo)", endereco: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimais: 6, moeda: "USD" },

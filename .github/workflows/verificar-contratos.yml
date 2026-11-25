@@ -1,0 +1,25 @@
+name: Verificar código dos contratos (Sourcify)
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain:
+        description: "chainId (137 = Polygon, 80002 = Amoy)"
+        default: "80002"
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.10.0
+      - name: Verificar
+        working-directory: contracts
+        run: ./script/verificar.sh "${{ inputs.chain }}"

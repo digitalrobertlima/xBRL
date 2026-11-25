@@ -305,7 +305,7 @@ async function executar(titulo, passos) {
     // Tanque automático: garante POL antes, se o usuário ativou.
     const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo, decimais: t.decimais, moeda: t.moeda || "BRL" }));
     modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Verificando o tanque de gás…</p>`);
-    const auto = S.externa ? null : await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts).catch(() => null);
+    const auto = S.externa ? null : await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts, [S.imp?.xBRL]).catch(() => null);
     if (auto) toast(`⛽ Tanque abastecido com ${auto.simbolo}`);
     // Sem POL para terminar? Se der, vira pedido sem gás (QR/link) para outra pessoa enviar.
     const saldoPol = await S.provider.getBalance(S.endereco);
@@ -1517,8 +1517,14 @@ async function acao(nome, el) {
     case "tq-cotar": {
       const t = S.params.candidatos[Number($("#tq-token").value)];
       if (S.params.faltam === 0n) return toast("O tanque já está cheio");
-      $("#tq-cot").innerHTML = `<div class="giro"></div>`;
-      const cot = await G.cotarAbastecimento(S.provider, S.chainId, t.endereco, S.params.faltam, t);
+      $("#tq-cot").innerHTML = `<div class="giro"></div><p class="mudo">Procurando o caminho até o POL…</p>`;
+      let cot;
+      try {
+        cot = await G.cotarAbastecimento(S.provider, S.chainId, t.endereco, S.params.faltam, t, [S.imp?.xBRL]);
+      } catch (e) {
+        $("#tq-cot").innerHTML = `<div class="aviso">${esc(traduzirErro(e))}</div>`;
+        return;
+      }
       S.params.cotacao = { ...cot, simbolo: t.simbolo, decimais: t.decimais };
       $("#tq-cot").innerHTML = `<div class="cartao"><div class="linha"><span>Recebe</span><b>${fmt(cot.quantidadePol, 18, 4)} POL</b></div>
         <div class="linha"><span>Custo cotado</span><b>${fmt(cot.entradaCotada, t.decimais, 4)} ${esc(t.simbolo)}</b></div>

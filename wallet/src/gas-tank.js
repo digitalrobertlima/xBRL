@@ -1,8 +1,10 @@
 // =====================================================================
 // xBRL — Tanque de Gás Transparente
 // Mantém até 3,0 POL na carteira para pagar as taxas da rede. Quando o tanque fica abaixo de 1,0 POL,
-// troca um token da própria carteira (xBRL, BRZ, BRLA ou USDC) por POL na Uniswap V3:
-//   - cotação na hora pelo QuoterV2 (sem servidor);
+// troca um token da própria carteira (BRLS, BRZ, BRLA ou USDC) por POL na Uniswap V3:
+//   - descobre sozinho o caminho (até 3 trocas, ex.: BRLS → BRLA → USDC → POL), só por fundos que existem
+//     e têm dinheiro dentro, lidos na própria blockchain (fábrica da Uniswap + Multicall3, sem servidor);
+//   - cotação na hora pelo QuoterV2;
 //   - slippage máximo de 1% (amountInMaximum = cotação × 1,01) — se o preço piorar, a troca falha e nada é gasto;
 //   - prazo de 5 min; aprovação exata (nunca "infinita");
 //   - tudo registrado no histórico local e exibido antes de assinar.
@@ -84,46 +86,87 @@ function caminhoReverso(tokens, taxas) {
   return e().solidityPacked(tipos, valores);
 }
 
+const ABI_FABRICA = ["function getPool(address,address,uint24) view returns (address)"];
+const ABI_POOL = ["function liquidity() view returns (uint128)"];
+const ABI_MULTICALL = ["function aggregate3((address target,bool allowFailure,bytes callData)[] calls) payable returns ((bool success,bytes returnData)[] returnData)"];
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Caminhos possíveis de `entrada` até `saida` (até `maxSaltos` trocas), dada a lista de fundos com dinheiro.
+ * fundos = [{ a, b, taxa }]. Devolve [{ tokens: [entrada, …, saida], taxas: [...] }], os mais curtos primeiro.
+ */
+export function caminhosPossiveis(entrada, saida, fundos, maxSaltos = 3) {
+  const low = (x) => x.toLowerCase();
+  const viz = new Map();
+  for (const f of fundos) {
+    for (const [x, y] of [[f.a, f.b], [f.b, f.a]]) {
+      if (!viz.has(low(x))) viz.set(low(x), []);
+      viz.get(low(x)).push({ para: y, taxa: f.taxa });
+    }
+  }
+  const saidas = [];
+  const andar = (tokens, taxas) => {
+    const atual = tokens[tokens.length - 1];
+    if (low(atual) === low(saida)) return saidas.push({ tokens, taxas });
+    if (taxas.length >= maxSaltos) return;
+    for (const v of viz.get(low(atual)) || []) {
+      if (tokens.some((t) => low(t) === low(v.para))) continue; // sem voltar por onde passou
+      andar([...tokens, v.para], [...taxas, v.taxa]);
+    }
+  };
+  andar([entrada], []);
+  return saidas.sort((x, y) => x.taxas.length - y.taxas.length);
+}
+
+/** Lê na blockchain quais fundos (par + taxa) existem e têm dinheiro dentro. */
+async function fundosComDinheiro(provider, u, moedas) {
+  const fab = new (e().Interface)(ABI_FABRICA);
+  const poolI = new (e().Interface)(ABI_POOL);
+  const mc = new (e().Contract)(u.multicall3, ABI_MULTICALL, provider);
+  const pares = [];
+  for (let i = 0; i < moedas.length; i++) {
+    for (let j = i + 1; j < moedas.length; j++) {
+      for (const taxa of u.taxasPool) pares.push({ a: moedas[i], b: moedas[j], taxa });
+    }
+  }
+  const r1 = await mc.aggregate3.staticCall(pares.map((p) => ({ target: u.fabrica, allowFailure: true, callData: fab.encodeFunctionData("getPool", [p.a, p.b, p.taxa]) })));
+  const existentes = [];
+  r1.forEach((r, i) => {
+    if (!r.success) return;
+    const end = fab.decodeFunctionResult("getPool", r.returnData)[0];
+    if (end && end !== ZERO) existentes.push({ ...pares[i], pool: end });
+  });
+  if (!existentes.length) return [];
+  const r2 = await mc.aggregate3.staticCall(existentes.map((p) => ({ target: p.pool, allowFailure: true, callData: poolI.encodeFunctionData("liquidity") })));
+  return existentes.filter((p, i) => r2[i].success && poolI.decodeFunctionResult("liquidity", r2[i].returnData)[0] > 0n);
+}
+
 /**
  * Cota quanto de `tokenEntrada` é preciso para obter `quantidadePol` (wei) de POL.
- * Tenta pool direto em várias taxas e, se não houver, rota via USDC. Escolhe o mais barato.
+ * Procura todos os caminhos de até 3 trocas por fundos com dinheiro e escolhe o mais barato.
+ * `outras` = moedas extras por onde pode passar (ex.: o BRLS da implantação).
  */
-export async function cotarAbastecimento(provider, chainId, tokenEntrada, quantidadePol, info = { decimais: 18, moeda: "BRL" }) {
+export async function cotarAbastecimento(provider, chainId, tokenEntrada, quantidadePol, info = { decimais: 18, moeda: "BRL" }, outras = []) {
   const rede = REDES[chainId];
   if (!rede?.uniswap) throw new Error("Auto-swap indisponível nesta rede");
   const u = rede.uniswap;
   const quoter = new (e().Contract)(u.quoterV2, ABI_QUOTER, provider);
-  const rotas = [];
-
-  for (const taxa of u.taxasPool) {
-    try {
-      const r = await quoter.quoteExactOutputSingle.staticCall({
-        tokenIn: tokenEntrada,
-        tokenOut: u.wpol,
-        amount: quantidadePol,
-        fee: taxa,
-        sqrtPriceLimitX96: 0,
-      });
-      rotas.push({ tipo: "direta", taxas: [taxa], entrada: r.amountIn });
-    } catch {
-      /* pool inexistente ou sem liquidez */
-    }
+  const moedas = [];
+  for (const m of [tokenEntrada, u.wpol, ...(u.intermediarios || [u.usdc]), ...outras]) {
+    if (m && e().isAddress(m) && !moedas.some((x) => x.toLowerCase() === m.toLowerCase())) moedas.push(e().getAddress(m));
   }
-  if (tokenEntrada.toLowerCase() !== u.usdc.toLowerCase()) {
-    for (const t1 of [500, 3000, 100]) {
-      for (const t2 of [500, 3000]) {
-        try {
-          // saída WPOL ← t2 ← USDC ← t1 ← entrada
-          const path = caminhoReverso([u.wpol, u.usdc, tokenEntrada], [t2, t1]);
-          const r = await quoter.quoteExactOutput.staticCall(path, quantidadePol);
-          rotas.push({ tipo: "via USDC", taxas: [t1, t2], path, entrada: r.amountIn });
-        } catch {
-          /* rota indisponível */
-        }
-      }
-    }
-  }
-  if (!rotas.length) throw new Error("Sem liquidez para trocar este token por POL agora");
+  const fundos = await fundosComDinheiro(provider, u, moedas);
+  const caminhos = caminhosPossiveis(tokenEntrada, u.wpol, fundos, 3).slice(0, 16);
+  const simbolo = (end) => rede.tokens?.find((t) => t.endereco.toLowerCase() === end.toLowerCase())?.simbolo || (outras.some((o) => o?.toLowerCase() === end.toLowerCase()) ? "BRLS" : `${end.slice(0, 6)}…`);
+  const cotados = await Promise.allSettled(caminhos.map(async (c) => {
+    // exactOutput lê o caminho de trás para a frente: POL ← … ← entrada
+    const path = caminhoReverso([...c.tokens].reverse(), [...c.taxas].reverse());
+    const r = await quoter.quoteExactOutput.staticCall(path, quantidadePol);
+    const meio = c.tokens.slice(1, -1).map(simbolo);
+    return { tipo: meio.length ? `via ${meio.join(" → ")}` : "direta", taxas: c.taxas, path, entrada: r.amountIn };
+  }));
+  const rotas = cotados.filter((x) => x.status === "fulfilled" && x.value.entrada > 0n).map((x) => x.value);
+  if (!rotas.length) throw new Error("Ainda não há fundo na Uniswap que leve esta moeda até o POL. Escolha outra moeda para abastecer.");
   rotas.sort((a, b) => (a.entrada < b.entrada ? -1 : 1));
   const melhor = rotas[0];
   const maximo = (melhor.entrada * (10_000n + TANQUE.slippageMaxBps)) / 10_000n;
@@ -164,7 +207,7 @@ export async function abastecer(signer, cotacao, opcoesTx = {}) {
   const router = new (e().Contract)(u.swapRouter02, ABI_ROUTER, signer);
   const iface = router.interface;
   let chamadaSwap;
-  if (cotacao.rota.tipo === "direta") {
+  if (!cotacao.rota.path) {
     chamadaSwap = iface.encodeFunctionData("exactOutputSingle", [{
       tokenIn: cotacao.tokenEntrada,
       tokenOut: u.wpol,
@@ -200,14 +243,14 @@ export async function abastecer(signer, cotacao, opcoesTx = {}) {
  * Abastecimento automático (se o usuário ativou): escolhe o primeiro token da lista com saldo suficiente.
  * `tokensPreferidos` = [{endereco, simbolo}] na ordem de preferência.
  */
-export async function abastecerSeNecessario(provider, signer, chainId, tokensPreferidos, opcoesTx = {}) {
+export async function abastecerSeNecessario(provider, signer, chainId, tokensPreferidos, opcoesTx = {}, outras = []) {
   if (!autoAtivo() || !REDES[chainId]?.uniswap) return null;
   const dono = await signer.getAddress();
   const est = await estadoTanque(provider, dono);
   if (!est.precisaAbastecer || !est.podePagarSwap) return null;
   for (const t of tokensPreferidos) {
     try {
-      const cot = await cotarAbastecimento(provider, chainId, t.endereco, est.faltam, t);
+      const cot = await cotarAbastecimento(provider, chainId, t.endereco, est.faltam, t, outras);
       const bal = await new (e().Contract)(t.endereco, ABI_ERC20, provider).balanceOf(dono);
       if (bal >= cot.entradaMaxima) {
         const recibo = await abastecer(signer, cot, opcoesTx);

@@ -1240,7 +1240,7 @@ TELAS.AJUSTES = async () => {
       <h2 style="margin-top:0">Sobre</h2>
       <div class="linha"><span>Versão</span><b>${esc(VERSAO)}</b></div>
       <div class="linha"><span>Sua carteira</span><a href="${esc(linkExplorer(S.chainId, "address", S.endereco))}" target="_blank" rel="noopener">${esc(curto(S.endereco))}</a></div>
-      ${S.imp ? ["xBRL", "ReservaBRL", "CofreCripto", "EscrowTrabalho", "Mensageiro"].map((n) => `<div class="linha"><span>${n}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
+      ${S.imp ? [["xBRL", "Moeda BRLS"], ["ReservaBRL", "Reserva"], ["CofreCripto", "Cofre cripto"], ["EscrowTrabalho", "Trabalhos"], ["Mensageiro", "Conversas"], ["Encaminhador", "Envio sem gás"]].filter(([n]) => S.imp[n]).map(([n, rotulo]) => `<div class="linha"><span>${rotulo}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
       <div class="linha"><span>Taxa vitalícia 0,1% para</span><span>${esc(curto(CREATOR_TREASURY))}</span></div>
     </div>
     <h2>Zona de perigo</h2>

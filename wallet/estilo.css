@@ -225,3 +225,8 @@ details.cartao summary { cursor: pointer; padding: 4px 0; }
 .passos li.agora::before { background: var(--ipe); border-color: var(--ipe); color: var(--mata-funda); }
 .passos li:last-child { border-left-color: transparent; }
 .passos p { color: var(--mudo); margin: 4px 0 0; }
+
+/* Comprovante aberto dentro do próprio app (Caixa Forte no Android: nada sai do Tor) */
+.janela-comprovante { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--mata-funda); }
+.janela-comprovante .btn { align-self: flex-start; }
+.janela-comprovante iframe { flex: 1; width: 100%; border: 1px solid var(--gravura); border-radius: 12px; background: var(--mata); }

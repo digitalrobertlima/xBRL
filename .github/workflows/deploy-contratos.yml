@@ -16,7 +16,7 @@ on:
         default: polygon
       saldo_minimo_pol:
         description: "Começa quando a carteira de deploy tiver pelo menos este saldo (POL)"
-        default: "2"
+        default: "10"
       espera_max_minutos:
         description: "Quanto tempo esperar o saldo chegar (máx. 340)"
         default: "340"
@@ -118,8 +118,19 @@ jobs:
       - name: Implantar (CREATE2 determinístico)
         working-directory: contracts
         run: |
+          # Se um RPC público recusar uma consulta no meio (erro 403 de "archive"), retoma de onde parou
+          # em outro RPC, sem repetir o que já foi enviado (--resume).
+          if [ "$CHAIN" = "137" ]; then OUTROS="https://polygon.drpc.org https://rpc.ankr.com/polygon https://polygon-rpc.com"; else OUTROS="https://rpc.ankr.com/polygon_amoy"; fi
+          ok=0
           forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url "$RPC" --private-key "$CHAVE" \
-            --broadcast --slow --priority-gas-price "$GORJETA"
+            --broadcast --slow --priority-gas-price "$GORJETA" && ok=1
+          for alt in $OUTROS; do
+            [ "$ok" = "1" ] && break
+            echo "Retomando em $alt"; sleep 20
+            forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url "$alt" --private-key "$CHAVE" \
+              --broadcast --slow --resume --priority-gas-price "$GORJETA" && ok=1
+          done
+          test "$ok" = "1" || { echo "::error::Implantação não terminou"; exit 1; }
           cat "../wallet/src/deployments/$CHAIN.json"
 
       - name: Verificar código-fonte (Sourcify)

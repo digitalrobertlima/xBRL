@@ -520,12 +520,12 @@ contract ReservaBRLTest is Base {
         _emitirBrla(bob, 600_000e6);
         assertEq(reserva.fase(), 2);
 
-        // BRZ vai a 53,84% (alvo 50%): spread = (5384-5000)*40/1000 = 15 bps
+        // BRZ vai a 53,84% (alvo 50%): spread = 100.000 x 384 x 40 / (1000 x 10000) = 153,6
         (uint256 l, uint256 t, uint256 s) = reserva.cotarEmissao(address(brz), 100_000e18);
         assertEq(t, 100e18);
-        assertEq(s, 150e18);
-        assertEq(l, 99_750e18);
-        assertEq(_emitirBrz(carol, 100_000e18), 99_750e18);
+        assertEq(s, 153.6e18);
+        assertEq(l, 99_746.4e18);
+        assertEq(_emitirBrz(carol, 100_000e18), 99_746.4e18);
         _lastroCobreSupply();
         assertGt(reserva.lastroTotal(), token.totalSupply(), "spread vira sobrecolateral");
 

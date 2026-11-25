@@ -291,7 +291,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (t.modalidade == Modalidade.Entrega) revert ModalidadeInvalida(); // entrega exige código
         if (t.modalidade == Modalidade.Presencial && !t.checkin) revert CheckInObrigatorio();
         t.estado = Estado.Entregue;
-        t.entregueEm = uint64(block.timestamp);
+        t.entregueEm = SafeCast.toUint64(block.timestamp);
         emit EntregaMarcada(id, t.etapasPagas + 1);
     }
 
@@ -322,7 +322,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (msg.sender != t.cliente && msg.sender != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito && t.estado != Estado.Entregue) revert EstadoInvalido(t.estado);
         t.estado = Estado.Disputa;
-        t.disputaEm = uint64(block.timestamp);
+        t.disputaEm = SafeCast.toUint64(block.timestamp);
         ++reputacao[t.cliente].disputas;
         ++reputacao[t.trabalhador].disputas;
         emit DisputaAberta(id, msg.sender);
@@ -421,6 +421,8 @@ contract EscrowTrabalho is ReentrancyGuard {
         int256 c = _cos(latMediaRad);
         int256 dyNm = dLat * NM_POR_MICRODEGRAU;
         int256 dxNm = (dLon * NM_POR_MICRODEGRAU * c) / E18;
+        // dxNm já está em nanômetros: arredondar antes de elevar ao quadrado muda < 1 nm.
+        // forge-lint: disable-next-line(divide-before-multiply)
         uint256 d2 = SafeCast.toUint256(dyNm * dyNm) + SafeCast.toUint256(dxNm * dxNm);
         return Math.sqrt(d2) / 1e6; // nm → mm
     }
@@ -431,6 +433,8 @@ contract EscrowTrabalho is ReentrancyGuard {
         int256 termo = E18;
         soma = E18;
         for (int256 n = 1; n <= 6; ++n) {
+            // Série de Taylor em ponto fixo: cada termo é dividido pelo fatorial de propósito.
+            // forge-lint: disable-next-line(divide-before-multiply)
             termo = -(termo * x2) / E18 / ((2 * n - 1) * (2 * n));
             soma += termo;
         }

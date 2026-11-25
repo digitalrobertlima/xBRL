@@ -241,8 +241,12 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
         (liquido, taxa, spread) = _cotarEmissaoPos(token, bruto);
         if (liquido < minimoXbrl) revert SaidaMinimaNaoAtingida(liquido, minimoXbrl);
 
+        // Protegido por nonReentrant; o lastro já entrou e foi medido pelo saldo.
+        // forge-lint: disable-next-line(reentrancy-no-eth)
         XBRL.mint(msg.sender, liquido);
+        // forge-lint: disable-next-line(reentrancy-no-eth)
         if (taxa != 0) XBRL.mint(CREATOR_TREASURY, taxa);
+        // forge-lint: disable-next-line(reentrancy-events)
         emit Emitido(msg.sender, token, recebido, liquido, taxa, spread);
     }
 
@@ -269,8 +273,11 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
 
         IERC20(address(XBRL)).safeTransferFrom(msg.sender, address(this), valorXbrl);
         if (taxa != 0) IERC20(address(XBRL)).safeTransfer(CREATOR_TREASURY, taxa);
+        // Protegido por nonReentrant; a janela de resgate já foi atualizada antes das chamadas.
+        // forge-lint: disable-next-line(reentrancy-no-eth)
         XBRL.burn(bruto);
         IERC20(token).safeTransfer(msg.sender, pago);
+        // forge-lint: disable-next-line(reentrancy-events)
         emit Resgatado(msg.sender, token, valorXbrl, pago, taxa, spread);
     }
 
@@ -310,9 +317,8 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
             if (participacao >= FASE2_CONCENTRACAO_MAX_BPS) {
                 spread = (bruto * FASE2_SPREAD_MAX_BPS) / BPS;
             } else if (participacao > alvo) {
-                uint256 spreadBps =
-                    ((participacao - alvo) * FASE2_SPREAD_MAX_BPS) / (FASE2_CONCENTRACAO_MAX_BPS - alvo);
-                spread = (bruto * spreadBps) / BPS;
+                spread = (bruto * (participacao - alvo) * FASE2_SPREAD_MAX_BPS)
+                    / ((FASE2_CONCENTRACAO_MAX_BPS - alvo) * BPS);
             }
         }
         liquido = bruto - taxa - spread;
@@ -333,7 +339,7 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
     function _consumirJanela(uint256 bruto) private {
         if (fase() == 1) return;
         if (inicioJanela == 0 || block.timestamp >= uint256(inicioJanela) + JANELA) {
-            inicioJanela = uint64(block.timestamp);
+            inicioJanela = SafeCast.toUint64(block.timestamp);
             resgatadoNaJanela = 0;
             supplyInicioJanela = XBRL.totalSupply();
         }

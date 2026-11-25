@@ -53,7 +53,7 @@ Fonte do sistema (arredondada), botões grandes, mobile-first, ícones emoji, va
 ## 6. Comandos
 ```bash
 cd contracts
-forge build                       # zero warnings obrigatório
+forge build                       # zero warnings obrigatório (forge v1.10.0, fixado no CI)
 forge test                        # 60 testes (unit, fuzz, invariantes, integração, script)
 FOUNDRY_PROFILE=ci forge test     # fuzz com 2048 execuções
 node script/exportar-abis.cjs     # regenera wallet/src/abis.js depois de mudar contratos

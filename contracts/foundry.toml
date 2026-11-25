@@ -19,7 +19,11 @@ remappings = [
 fs_permissions = [{ access = "read-write", path = "../wallet/src/deployments" }]
 
 [lint]
-exclude_lints = ["asm-keccak256"]
+# Revisadas e aceitas de propósito:
+#  - asm-keccak256: micro-otimização de gás; legibilidade vale mais.
+#  - block-timestamp: prazos são de horas/dias; validadores só deslocam segundos.
+#  - calls-loop / require-revert-in-loop: laços limitados (MAX_LASTROS = 8) que DEVEM reverter com entrada inválida.
+exclude_lints = ["asm-keccak256", "block-timestamp", "calls-loop", "require-revert-in-loop"]
 
 [fuzz]
 runs = 512

@@ -82,6 +82,8 @@ contract xBRL is ERC20, ERC20Permit {
     function inicializar(address reserva_, address[] calldata isentos) external {
         if (msg.sender != _inicializador) revert NaoAutorizado();
         if (reserva_ == address(0)) revert EnderecoZero();
+        // O evento Inicializado (abaixo) registra o fim do papel de inicializador.
+        // forge-lint: disable-next-line(missing-events-access-control)
         _inicializador = address(0);
         reserva = reserva_;
         isentoDeTaxa[reserva_] = true;

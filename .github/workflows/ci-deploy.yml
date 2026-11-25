@@ -1,0 +1,79 @@
+name: CI e Deploy (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xbrl-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contratos:
+    name: Contratos — build sem warnings + testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build (deny = warnings)
+        working-directory: contracts
+        run: forge build --sizes
+
+      - name: Testes unitários, fuzzing, invariantes e integração
+        working-directory: contracts
+        env:
+          FOUNDRY_PROFILE: ci
+        run: forge test -vv
+
+      - name: ABIs da carteira em sincronia com os contratos
+        run: |
+          node contracts/script/exportar-abis.cjs
+          git diff --exit-code wallet/src/abis.js
+
+      - name: Sintaxe dos módulos da carteira
+        run: for f in wallet/src/*.js wallet/sw.js; do node --input-type=module --check < "$f"; done
+
+  pages:
+    name: Publicar landing + carteira
+    needs: contratos
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Montar o site estático
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp -r wallet assets _site/
+          rm -f _site/wallet/src/deployments/31337.json
+          touch _site/.nojekyll
+          # Nova versão do Service Worker a cada publicação: força a atualização em todos os aparelhos.
+          sed -i "s/const VERSAO = \"xbrl-wallet-[^\"]*\"/const VERSAO = \"xbrl-wallet-${GITHUB_SHA::12}\"/" _site/wallet/sw.js
+          grep -n "const VERSAO" _site/wallet/sw.js
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

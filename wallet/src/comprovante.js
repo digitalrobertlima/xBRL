@@ -3,6 +3,7 @@
 // Lê a transação direto da blockchain (sem servidor) e explica, em linguagem simples, o que aconteceu:
 // quem enviou, quanto, para quem, em qual trabalho, quanto custou a taxa.
 // =====================================================================
+import "./rede-ponte.js"; // primeiro: dentro do app Android, a rede vem da janela de cima (Tor)
 import { ABIS, CREATOR_TREASURY, REDES, REDE_PADRAO, carregarImplantacao, linkTecnico } from "./config.js";
 import { enderecoSalvo } from "./keystore.js";
 import { marca, roseta } from "./marca.js";

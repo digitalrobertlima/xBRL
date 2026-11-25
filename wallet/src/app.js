@@ -5,6 +5,7 @@
 // - Ações que movem dinheiro exigem "segurar para confirmar"; desbloqueio exige "deslizar" + PIN.
 // - Chegada ao local é comprovada por código/QR (palavras), nunca por GPS (falsificável).
 // =====================================================================
+import { REDE_PELA_PONTE } from "./rede-ponte.js"; // primeiro: no app Android, a rede vem pela Caixa Forte (Tor)
 import { carregarImplantacaoBeta } from "./config.js";
 import { ABIS, COFRE, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
 import * as K from "./keystore.js";
@@ -1800,10 +1801,30 @@ async function acaoTrabalho(nome) {
 // ----------------------------------------------------------------------------
 // Partida
 // ----------------------------------------------------------------------------
+// No app Android, um link "abrir em outra janela" sairia do Tor: o comprovante abre aqui dentro.
+function abrirComprovantesAqui() {
+  document.addEventListener("click", (ev) => {
+    const a = ev.target.closest?.("a[href]");
+    if (!a) return;
+    const u = new URL(a.getAttribute("href"), location.href);
+    if (u.origin !== location.origin || !u.pathname.endsWith("/comprovante.html")) return;
+    ev.preventDefault();
+    u.searchParams.set("rede", u.searchParams.get("rede") || String(S.chainId));
+    const janela = document.createElement("div");
+    janela.className = "janela-comprovante";
+    janela.innerHTML = `<button type="button" class="btn sec">← Voltar</button><iframe title="Comprovante"></iframe>`;
+    u.searchParams.set("tor", "pai"); // usa a rede desta janela (pela Caixa Forte)
+    janela.querySelector("iframe").src = u.pathname + u.search;
+    janela.querySelector("button").addEventListener("click", () => janela.remove());
+    document.body.appendChild(janela);
+  }, true);
+}
+
 async function iniciar() {
   S.tela = "CARREGANDO";
   $("#marca").innerHTML = marca(32);
-  if ("serviceWorker" in navigator && location.protocol === "https:") {
+  if (REDE_PELA_PONTE) abrirComprovantesAqui();
+  else if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
     let recarregou = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {

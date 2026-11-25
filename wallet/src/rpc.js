@@ -9,7 +9,10 @@ const ERRO_LEGITIMO = /revert|execution|insufficient funds|nonce|underpriced|alr
 export class ProvedorRotativo extends E.JsonRpcApiProvider {
   constructor(urls, chainId) {
     const net = E.Network.from(chainId);
-    super(net, { staticNetwork: net, batchMaxCount: 1, cacheTimeout: -1, polling: true, pollingInterval: urls[0].includes("127.0.0.1") ? 1000 : 2000 });
+    // Pelo Tor (app Android da Caixa Forte) cada pedido demora mais: consulta com menos frequência e espera mais.
+    const lenta = !!globalThis.BRLS_REDE_LENTA;
+    super(net, { staticNetwork: net, batchMaxCount: 1, cacheTimeout: -1, polling: true, pollingInterval: urls[0].includes("127.0.0.1") ? 1000 : lenta ? 4000 : 2000 });
+    this._espera = lenta ? 45_000 : 12_000;
     this._urls = urls;
     this._atual = 0;
   }
@@ -22,7 +25,7 @@ export class ProvedorRotativo extends E.JsonRpcApiProvider {
       const k = (this._atual + n) % this._urls.length;
       const url = this._urls[k];
       try {
-        const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: corpo, signal: AbortSignal.timeout(12_000) });
+        const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: corpo, signal: AbortSignal.timeout(this._espera) });
         if (!r.ok) throw new Error(`servidor ${new URL(url).host} respondeu ${r.status}`);
         const j = await r.json();
         const lista = Array.isArray(j) ? j : [j];

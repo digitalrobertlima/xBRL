@@ -14,13 +14,16 @@ const DOMINIO = new TextEncoder().encode("xBRL.chat.v1");
 export const MAX_CARACTERES = 1_000;
 
 /** Chave pública sem o prefixo 0x04 (64 bytes), como o Mensageiro guarda. */
-export function chavePublica64(carteira) {
-  return "0x" + carteira.signingKey.publicKey.slice(4);
+export async function chavePublica64(carteira) {
+  if (carteira.signingKey) return "0x" + carteira.signingKey.publicKey.slice(4);
+  return carteira.chavePublica64(); // carteira conectada (Caixa Forte)
 }
 
 async function chaveAes(carteira, pub64, usos) {
-  const compartilhado = E().getBytes(carteira.signingKey.computeSharedSecret("0x04" + pub64.slice(2)));
-  const material = new Uint8Array([...compartilhado.slice(1, 33), ...DOMINIO]); // só o X do ponto
+  // Só o X do ponto compartilhado (32 bytes). Carteira conectada calcula do lado dela, sem expor a chave.
+  const bruto = carteira.signingKey ? E().getBytes(carteira.signingKey.computeSharedSecret("0x04" + pub64.slice(2))) : E().getBytes(await carteira.segredoCom(pub64));
+  const x = bruto.length === 65 ? bruto.slice(1, 33) : bruto.slice(0, 32);
+  const material = new Uint8Array([...x, ...DOMINIO]);
   const hash = await crypto.subtle.digest("SHA-256", material);
   return crypto.subtle.importKey("raw", hash, "AES-GCM", false, usos);
 }
@@ -125,7 +128,7 @@ export class Chat {
     const cifrados = [];
     const semChave = [];
     for (const p of unicos) {
-      const pub = p.toLowerCase() === eu ? chavePublica64(carteira) : await this.chaveDe(p, txsPorConta[p.toLowerCase()] || []);
+      const pub = p.toLowerCase() === eu ? await chavePublica64(carteira) : await this.chaveDe(p, txsPorConta[p.toLowerCase()] || []);
       if (!pub) {
         semChave.push(p);
         continue;
@@ -137,9 +140,9 @@ export class Chat {
     let registrar = "0x";
     try {
       const atual = await this.contrato.chavePublica(carteira.address);
-      if (E().dataLength(atual) !== 64) registrar = chavePublica64(carteira);
+      if (E().dataLength(atual) !== 64) registrar = await chavePublica64(carteira);
     } catch {
-      registrar = chavePublica64(carteira);
+      registrar = await chavePublica64(carteira);
     }
     return { conversa, para, cifrados, registrar, semChave };
   }

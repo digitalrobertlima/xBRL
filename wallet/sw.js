@@ -18,6 +18,7 @@ const ARQUIVOS = [
   "./src/chat.js",
   "./src/semgas.js",
   "./src/rpc.js",
+  "./src/externa.js",
   "./src/marca.js",
   "./src/comprovante.js",
   "./comprovante.html",

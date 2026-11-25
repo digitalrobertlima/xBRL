@@ -44,7 +44,8 @@ const S = {
 const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA"],
-  BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR"],
+  BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS"],
+  VAGAS_PUBLICAS: ["BOAS_VINDAS", "CRIAR_FRASE", "RESTAURAR"],
   CRIAR_FRASE: ["CONFIRMAR_FRASE", "BOAS_VINDAS"],
   CONFIRMAR_FRASE: ["DEFINIR_PIN", "CRIAR_FRASE"],
   RESTAURAR: ["DEFINIR_PIN", "BOAS_VINDAS"],
@@ -448,7 +449,27 @@ TELAS.BOAS_VINDAS = () => tela(`
   </div>
   <button class="btn prim" data-acao="criar">Criar minha carteira</button>
   <button class="btn sec" data-acao="restaurar">Já tenho as 12 palavras</button>
+  <button class="btn sec" data-ir="VAGAS_PUBLICAS">👀 Ver vagas de trabalho abertas</button>
   <div class="aviso">Sem cadastro, sem servidor. Se você perder as 12 palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
+
+TELAS.VAGAS_PUBLICAS = async () => {
+  if (!S.escrow) return tela(`<h1>Vagas abertas</h1><div class="aviso">Ainda não há trabalhos nesta rede.</div><button class="btn sec" data-ir="BOAS_VINDAS">Voltar</button>`);
+  tela(`<h1>👀 Vagas abertas</h1><div class="cartao"><div class="giro"></div><p class="mudo" id="sinc-txt">Lendo a blockchain…</p></div>`);
+  await S.escrow.sincronizar(({ bloco, atual }) => {
+    const t = $("#sinc-txt");
+    if (t) t.textContent = `Lendo a blockchain… bloco ${bloco.toLocaleString("pt-BR")} de ${atual.toLocaleString("pt-BR")}`;
+  });
+  const { vagas } = await S.escrow.listar(E.ZeroAddress);
+  tela(`
+    <h1>👀 Vagas abertas</h1>
+    <p class="mudo">Trabalhos com o pagamento já travado no contrato: quem fizer, recebe. Para aceitar uma vaga, crie sua carteira (é grátis e leva 1 minuto).</p>
+    ${vagas.map((t) => {
+      const m = ESCROW.modalidades[t.modalidade];
+      return `<div class="item"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">${esc(m.nome)} · prazo ${esc(new Date(t.prazo * 1000).toLocaleDateString("pt-BR"))}</span></span><b>${reais(t.valor)}</b></div>`;
+    }).join("") || `<div class="cartao"><p class="mudo">Nenhuma vaga aberta agora. Volte mais tarde!</p></div>`}
+    <button class="btn prim" data-acao="criar">Quero trabalhar: criar minha carteira</button>
+    <button class="btn sec" data-ir="BOAS_VINDAS">Voltar</button>`);
+};
 
 TELAS.CRIAR_FRASE = () => {
   S.frasePendente ||= K.gerarFrase();
@@ -586,6 +607,8 @@ TELAS.INICIO = async () => {
 TELAS.RECEBER = () => tela(`
   <h1>Receber</h1>
   <p class="mudo">Envie para este endereço somente pela rede <b>${esc(S.rede.nome)}</b>: xBRL, POL, BRZ, BRLA, USDC.</p>
+  ${qrSvg(S.endereco)}
+  <p class="mudo" style="text-align:center">Mostre este QR para quem vai te pagar.</p>
   <div class="endereco" id="meu-end">${esc(S.endereco)}</div>
   <div class="grade duas" style="margin-top:12px">
     <button class="btn prim" data-acao="copiar-end">Copiar</button>
@@ -598,7 +621,7 @@ TELAS.ENVIAR = () => {
   tela(`
     <h1>Enviar</h1>
     <label for="env-token">Moeda</label><select id="env-token">${opts.join("")}</select>
-    <label for="env-para">Para (endereço 0x…)</label><input id="env-para" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="0x…">
+    <label for="env-para">Para (endereço 0x…)</label><input id="env-para" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="0x…"><button class="btn sec" data-acao="scan-endereco">📷 Ler QR do endereço</button>
     <label for="env-valor">Valor</label><input id="env-valor" class="grande" inputmode="decimal" placeholder="0,00">
     <div id="env-prev" class="mudo"></div>
     ${botaoSegurar("enviar", "enviar")}`);
@@ -934,7 +957,10 @@ async function escanearQR(alvo) {
     try {
       const r = await detector.detect(v);
       if (r[0]?.rawValue) {
-        $(alvo).value = normalizarCodigo(r[0].rawValue);
+        const lido = String(r[0].rawValue);
+        const end = lido.match(/0x[0-9a-fA-F]{40}/);
+        $(alvo).value = alvo === "#env-para" ? (end ? end[0] : "") : normalizarCodigo(lido);
+        $(alvo).dispatchEvent(new Event("change"));
         parar();
         fecharModal();
         toast("Código lido ✅");
@@ -978,7 +1004,10 @@ TELAS.TRABALHO_NOVO = () => {
     <h1>Contratar</h1>
     <div class="grade duas">${ESCROW.modalidades.map((x) => `<button class="atalho" data-acao="mod-${x.id}" aria-pressed="${x.id === m}" style="${x.id === m ? "border-color:var(--o400);background:rgba(212,175,55,.14)" : ""}"><span>${x.icone}</span>${esc(x.nome)}</button>`).join("")}</div>
     <p class="mudo">${esc(ESCROW.modalidades[m].resumo)}</p>
-    <label for="tn-desc">O que precisa ser feito</label><input id="tn-desc" maxlength="140" placeholder="Ex.: Entregar 50 pastéis na Rua X">
+    <label for="tn-desc">O que precisa ser feito</label><input id="tn-desc" maxlength="100" placeholder="Ex.: Escrever uma mensagem num papel">
+    ${m === 0 || m === 1 ? `<label for="tn-regiao">📍 Bairro e cidade ${m === 1 ? "da entrega" : "do serviço"} (obrigatório, aparece para todos)</label><input id="tn-regiao" maxlength="36" placeholder="Ex.: Savassi, Belo Horizonte">
+    <label for="tn-endereco">🏠 Endereço completo (obrigatório)</label><input id="tn-endereco" maxlength="200" placeholder="Rua, número, complemento, referência">
+    <p class="mudo">Por segurança, o endereço completo não fica público: só a pessoa aceita vê, pela conversa cifrada do trabalho.</p>` : ""}
     <label for="tn-valor">Pagamento (xBRL)</label><input id="tn-valor" class="grande" inputmode="decimal" placeholder="0,00">
     <label for="tn-prazo">Prazo (dias)</label><input id="tn-prazo" inputmode="numeric" value="7">
     ${m === 3 ? `<label for="tn-etapas">Número de etapas (2 a 50)</label><input id="tn-etapas" inputmode="numeric" value="3">` : ""}
@@ -1008,6 +1037,14 @@ TELAS.TRABALHO = async () => {
   const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
   const chegada = souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
   const devolucao = souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
+  const chaveEnd = t.modalidade === 0 ? t.chegadaHash : t.codigoHash;
+  let enderecoGuardado = null;
+  let enderecoEnviado = false;
+  try {
+    enderecoGuardado = localStorage.getItem(`xbrl.endereco.${chaveEnd}`);
+    enderecoEnviado = localStorage.getItem(`xbrl.endereco.enviado.${chaveEnd}`) === "1";
+  } catch { /* sem armazenamento */ }
+  const pedirEndereco = souCliente && enderecoGuardado && !enderecoEnviado && t.estado === 1 && t.trabalhador !== E.ZeroAddress;
   const z = E.ZeroAddress;
   const temArbitros = t.arbitroCliente !== z;
   const souParte = souCliente || t.trabalhador.toLowerCase() === S.endereco.toLowerCase();
@@ -1046,6 +1083,9 @@ TELAS.TRABALHO = async () => {
         ${t.estado === 3 ? `<div class="linha"><span>Propostas dos árbitros</span><b>${propArb(t.propostaArbCliente)} · ${propArb(t.propostaArbTrabalhador)}</b></div>` : ""}` : ""}
       ${t.desempateCriador ? `<div class="linha"><span>Desempate</span><b>criador da rede (opcional)</b></div>` : ""}
     </div>
+    ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small>${esc(enderecoGuardado)}</small></div><button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
+    ${souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo">📍 Endereço enviado pela conversa: ${esc(enderecoGuardado)}</p>` : ""}
+    ${!souCliente && souParte && (t.modalidade === 0 || t.modalidade === 1) && t.estado === 1 ? `<p class="mudo">📍 O endereço completo chega na 💬 conversa deste trabalho.</p>` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? "o trabalhador" : souArbitro ? "as partes" : "o cliente"}</button>` : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
     ${codigo ? `<h2>🔑 Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</h2><p class="mudo">Entregue só a quem recebe, na hora da entrega.</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
@@ -1261,6 +1301,8 @@ async function acao(nome, el) {
       return ir("EXTRATO", { filtro: nome.slice(4) });
     case "ext-atualizar":
       return render();
+    case "scan-endereco":
+      return escanearQR("#env-para");
     case "scan-devolucao":
       return escanearQR("#tr-dev");
     case "abrir-chat":
@@ -1269,6 +1311,18 @@ async function acao(nome, el) {
       return render();
     case "chat-voltar":
       return ir("TRABALHO", { id: S.params.t.id });
+    case "enviar-endereco": {
+      const t = S.params.t;
+      const chave = t.modalidade === 0 ? t.chegadaHash : t.codigoHash;
+      const end = localStorage.getItem(`xbrl.endereco.${chave}`);
+      const txs = {};
+      if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
+      if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
+      const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), `📍 Endereço: ${end}`, txs);
+      await executar("Enviar endereço", [{ rotulo: "Enviar cifrado", fn: (o) => c("Mensageiro", true).enviar(prep.conversa, prep.para, prep.cifrados, prep.registrar, o) }]);
+      localStorage.setItem(`xbrl.endereco.enviado.${chave}`, "1");
+      return;
+    }
     case "chat-enviar": {
       const t = S.params.t;
       const txs = {};
@@ -1460,6 +1514,10 @@ async function operarCofre() {
 
 async function criarTrabalho() {
   const m = Number(S.params.modalidade ?? 0);
+  const regiao = ($("#tn-regiao")?.value || "").trim();
+  const enderecoCompleto = ($("#tn-endereco")?.value || "").trim();
+  if ((m === 0 || m === 1) && regiao.length < 3) throw new Error("Informe o bairro e a cidade");
+  if ((m === 0 || m === 1) && enderecoCompleto.length < 8) throw new Error("Informe o endereço completo: sem ele a pessoa não sabe aonde ir");
   const valor = lerValor($("#tn-valor").value, 18);
   if (valor === 0n) throw new Error("Informe o pagamento");
   const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
@@ -1497,8 +1555,10 @@ async function criarTrabalho() {
     desempateCriador: m !== 1 && !!$("#tn-desempate")?.checked,
     caucao,
     devolucaoHash,
-    descricao: $("#tn-desc").value.trim().slice(0, 140),
+    descricao: (regiao ? `📍 ${regiao} · ` : "") + $("#tn-desc").value.trim().slice(0, 100),
   };
+  const chaveEnd = m === 0 ? chegadaHash : codigoHash;
+  if (enderecoCompleto) try { localStorage.setItem(`xbrl.endereco.${chaveEnd}`, enderecoCompleto); } catch { /* sem armazenamento */ }
   await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar xBRL"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
   if (codigo || chegada) {
     modal(`<h2>✅ Pagamento travado</h2>

@@ -14,6 +14,7 @@ import { Chat, MAX_CARACTERES } from "./chat.js";
 import * as SG from "./semgas.js";
 import { marca, roseta } from "./marca.js";
 import { ProvedorRotativo } from "./rpc.js";
+import { AssinanteExterno, conectarInjetada, procurarPonte, temInjetada } from "./externa.js";
 import qrcode from "./vendor/qrcode.mjs";
 
 const E = globalThis.ethers;
@@ -47,8 +48,8 @@ const S = {
 // ----------------------------------------------------------------------------
 const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
-  CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA"],
-  BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS"],
+  CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA", "INICIO"],
+  BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS", "INICIO"],
   VAGAS_PUBLICAS: ["BOAS_VINDAS", "CRIAR_FRASE", "RESTAURAR"],
   CRIAR_FRASE: ["CONFIRMAR_FRASE", "BOAS_VINDAS"],
   CONFIRMAR_FRASE: ["DEFINIR_PIN", "CRIAR_FRASE"],
@@ -71,7 +72,7 @@ function ir(destino, params = {}) {
   S.params = params;
   const aberta = ABERTAS.includes(destino);
   $("#abas").hidden = !aberta;
-  $("#btn-bloquear").hidden = !aberta;
+  $("#btn-bloquear").hidden = !aberta || !!S.externa;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
   const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
@@ -303,7 +304,7 @@ async function executar(titulo, passos) {
     // Tanque automático: garante POL antes, se o usuário ativou.
     const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo, decimais: t.decimais, moeda: t.moeda || "BRL" }));
     modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Verificando o tanque de gás…</p>`);
-    const auto = await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts).catch(() => null);
+    const auto = S.externa ? null : await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts).catch(() => null);
     if (auto) toast(`⛽ Tanque abastecido com ${auto.simbolo}`);
     // Sem POL para terminar? Se der, vira pedido sem gás (QR/link) para outra pessoa enviar.
     const saldoPol = await S.provider.getBalance(S.endereco);
@@ -317,6 +318,7 @@ async function executar(titulo, passos) {
     }
     for (const [i, p] of passos.entries()) {
       modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p>Passo ${i + 1} de ${passos.length}: ${esc(p.rotulo)}</p><p class="mudo">Assinando no seu aparelho…</p>`);
+      S.descricaoAtual = `${titulo}: ${p.rotulo}`;
       const tx = await p.fn(opts);
       if (!tx) continue;
       const link = linkExplorer(S.chainId, "tx", tx.hash);
@@ -411,7 +413,22 @@ function abrirSessao(frase) {
   S.ultimoUso = Date.now();
 }
 
+/** Conecta uma carteira de fora (Caixa Forte, MetaMask, Rabby): ela assina, o BRLS lê. */
+function conectarExterna(conexao) {
+  S.externa = conexao;
+  S.carteira = new AssinanteExterno(conexao, S.provider, () => S.descricaoAtual || "");
+  S.endereco = conexao.endereco;
+  S.ultimoUso = Date.now();
+  conexao.aoTrocarConta?.((novo) => {
+    if (!novo || !E.isAddress(novo)) return;
+    conectarExterna({ ...conexao, endereco: E.getAddress(novo) });
+    toast("Conta trocada na carteira conectada");
+    render();
+  });
+}
+
 function bloquear() {
+  if (S.externa) return; // quem tranca é a carteira conectada
   S.carteira = null;
   S.frasePendente = null;
   S.pinPendente = null;
@@ -422,11 +439,11 @@ function bloquear() {
 
 ["pointerdown", "keydown", "scroll"].forEach((ev) => addEventListener(ev, () => (S.ultimoUso = Date.now()), { passive: true }));
 setInterval(() => {
-  if (S.carteira && Date.now() - S.ultimoUso > SEGURANCA.bloqueioAutomaticoMs) bloquear();
+  if (S.carteira && !S.externa && Date.now() - S.ultimoUso > SEGURANCA.bloqueioAutomaticoMs) bloquear();
 }, 10_000);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) S.ocultoEm = Date.now();
-  else if (S.carteira && S.ocultoEm && Date.now() - S.ocultoEm > 60_000) bloquear();
+  else if (S.carteira && !S.externa && S.ocultoEm && Date.now() - S.ocultoEm > 60_000) bloquear();
 });
 
 // ----------------------------------------------------------------------------
@@ -486,6 +503,7 @@ TELAS.BOAS_VINDAS = () => tela(`
   <button class="btn prim" data-acao="criar">Criar minha carteira</button>
   <button class="btn sec" data-acao="restaurar">Já tenho as 12 palavras</button>
   <button class="btn sec" data-ir="VAGAS_PUBLICAS">👀 Ver vagas de trabalho abertas</button>
+  ${temInjetada() ? `<button class="btn sec" data-acao="conectar-injetada">🔌 Usar a carteira deste navegador (MetaMask, Rabby)</button>` : ""}
   <div class="aviso">Sem cadastro, sem servidor. Se você perder as 12 palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
 
 TELAS.VAGAS_PUBLICAS = async () => {
@@ -1228,6 +1246,7 @@ TELAS.AJUSTES = async () => {
     <h1>Ajustes</h1>
     <label for="aj-rede">Rede</label>
     <select id="aj-rede">${redes.map((r) => `<option value="${r.chainId}" ${r.chainId === S.chainId ? "selected" : ""}>${esc(r.nome)}</option>`).join("")}</select>
+    ${S.externa ? `<div class="cartao ok"><b>🔌 Conectada pela ${esc(S.externa.nome)}</b><p class="mudo">As chaves ficam na ${esc(S.externa.nome)}: é lá que você confirma cada operação, tranca a carteira e guarda as 12 palavras.</p></div>` : `
     <div class="cartao">
       <div class="linha"><span>Biometria (chave no chip)</span><b>${K.temBiometria() ? "ativada" : bioDisp ? "disponível" : "indisponível"}</b></div>
       ${bioDisp && !K.temBiometria() ? `<button class="btn sec" data-acao="bio-ativar">👆 Ativar biometria</button>` : ""}
@@ -1235,7 +1254,7 @@ TELAS.AJUSTES = async () => {
     </div>
     <button class="btn sec" data-ir="BACKUP">🔑 Ver minhas 12 palavras</button>
     <button class="btn sec" data-acao="trocar-pin">🔢 Trocar PIN</button>
-    <button class="btn sec" data-acao="bloquear">🔒 Bloquear agora</button>
+    <button class="btn sec" data-acao="bloquear">🔒 Bloquear agora</button>`}
     <div class="cartao">
       <h2 style="margin-top:0">Sobre</h2>
       <div class="linha"><span>Versão</span><b>${esc(VERSAO)}</b></div>
@@ -1243,10 +1262,10 @@ TELAS.AJUSTES = async () => {
       ${S.imp ? [["xBRL", "Moeda BRLS"], ["ReservaBRL", "Reserva"], ["CofreCripto", "Cofre cripto"], ["EscrowTrabalho", "Trabalhos"], ["Mensageiro", "Conversas"], ["Encaminhador", "Envio sem gás"]].filter(([n]) => S.imp[n]).map(([n, rotulo]) => `<div class="linha"><span>${rotulo}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
       <div class="linha"><span>Taxa vitalícia 0,1% para</span><span>${esc(curto(CREATOR_TREASURY))}</span></div>
     </div>
-    <h2>Zona de perigo</h2>
+    ${S.externa ? "" : `<h2>Zona de perigo</h2>
     <label for="aj-apagar">Para apagar a carteira deste aparelho, digite APAGAR</label><input id="aj-apagar" autocomplete="off">
     <button class="btn perigo segurar" data-confirmar="apagar"><i>✋ Segure para apagar deste aparelho</i></button>
-    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as 12 palavras.</p>`);
+    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as 12 palavras.</p>`}`);
   $("#aj-rede").addEventListener("change", async (ev) => {
     const id = Number(ev.target.value);
     localStorage.setItem("xbrl.rede", String(id));
@@ -1415,6 +1434,15 @@ async function acao(nome, el) {
     case "guia-ok":
       try { localStorage.setItem("xbrl.guia.ok", "1"); } catch { /* */ }
       return render();
+    case "conectar-injetada": {
+      const conexao = await conectarInjetada(S.chainId);
+      conectarExterna(conexao);
+      globalThis.ethereum.on?.("accountsChanged", (contas) => {
+        if (contas?.[0]) conectarExterna({ ...conexao, endereco: E.getAddress(contas[0]) });
+        render();
+      });
+      return ir("INICIO");
+    }
     case "semgas-ler":
       return escanearQR(null, (txt) => abrirPedidoSemGas(txt).catch(mostrarErro));
     case "semgas-compartilhar":
@@ -1790,6 +1818,13 @@ async function iniciar() {
     history.replaceState(null, "", location.pathname + location.search);
   }
   await conectarRede(escolherRedeInicial());
+  // Aberto dentro da Caixa Forte: usa a carteira dela, sem pedir 12 palavras nem PIN.
+  const ponte = await procurarPonte();
+  if (ponte) {
+    if (ponte.chainId && ponte.chainId !== S.chainId && REDES[ponte.chainId]) await conectarRede(ponte.chainId);
+    conectarExterna(ponte);
+    return ir("INICIO");
+  }
   ir(K.existeCofre() ? "BLOQUEADA" : "BOAS_VINDAS");
 }
 

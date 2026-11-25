@@ -52,6 +52,7 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 - Passos de ação do Escrow/Mensageiro usam `passoEscrow`/`passoMensagem` (que carregam a chamada para virar pedido sem gás). `executar` confere o POL antes: faltou e dá para assinar → mostra o QR/link; não dá → erro claro.
 - Leu um QR de código → abre na hora o botão "segure para confirmar" (a pessoa nunca fica sem saber o próximo passo).
 - Primeiros passos na tela Início até a pessoa ter POL, BRLS e fazer o primeiro trabalho.
+- **Carteira conectada** (`wallet/src/externa.js`): dentro da Caixa Forte (iframe, "ponte BRLS" por postMessage, só com a janela-mãe e a origem que respondeu) ou com MetaMask/Rabby (EIP-1193). Sem 12 palavras, PIN nem auto-bloqueio: a carteira de fora tranca e confirma. `AssinanteExterno` lê pelo RPC do BRLS e só pede `eth_sendTransaction`, `eth_signTypedData_v4`, `personal_sign` e, para a conversa, `brls_chavePublica`/`brls_segredo` (só a Caixa Forte; o segredo vem só com o X do ECDH). Protocolo espelhado em `price-monitoring/apps.js` — mudou um, muda o outro.
 - Cofre (`TELAS.COFRE`): aprovação exata para depósito/quitação/liquidação; mostra saúde e preço de liquidação.
 - Implantações sem `CofreCripto`/`Mensageiro` no JSON são ignoradas (ABIs incompatíveis).
 - Tanque de gás: alvo 3,0 POL, gatilho 1,0 POL, slippage máximo 1%, aprovação exata (nunca infinita), teto de preço R$ 5 / US$ 1 por POL contra cotação falsa.

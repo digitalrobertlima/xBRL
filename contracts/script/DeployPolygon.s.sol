@@ -59,7 +59,7 @@ contract DeployPolygon is Script {
         (, imp.deployer,) = vm.readCallers();
 
         imp.lastros = _lastros();
-        imp.token = _criar(type(xBRL).creationCode, abi.encode(CREATOR_TREASURY, imp.deployer));
+        imp.token = _criar(type(xBRL).creationCode, abi.encode(imp.deployer));
         imp.reserva = _criar(
             type(ReservaBRL).creationCode,
             abi.encode(imp.token, CREATOR_TREASURY, imp.lastros, CREATOR_TREASURY)
@@ -67,9 +67,7 @@ contract DeployPolygon is Script {
         imp.escrow = _criar(type(EscrowTrabalho).creationCode, abi.encode(imp.token, CREATOR_TREASURY));
 
         if (!xBRL(imp.token).inicializado()) {
-            address[] memory isentos = new address[](1);
-            isentos[0] = imp.escrow;
-            xBRL(imp.token).inicializar(imp.reserva, isentos);
+            xBRL(imp.token).inicializar(imp.reserva);
         }
         vm.stopBroadcast();
 
@@ -105,8 +103,8 @@ contract DeployPolygon is Script {
     function _validar(Implantacao memory imp) internal view {
         xBRL t = xBRL(imp.token);
         require(t.reserva() == imp.reserva, "reserva nao conectada");
-        require(t.isentoDeTaxa(imp.escrow), "isencao ausente");
-        require(t.CREATOR_TREASURY() == CREATOR_TREASURY, "treasury divergente");
+        require(ReservaBRL(imp.reserva).CREATOR_TREASURY() == CREATOR_TREASURY, "treasury divergente");
+        require(EscrowTrabalho(imp.escrow).CREATOR_TREASURY() == CREATOR_TREASURY, "treasury divergente");
         require(address(ReservaBRL(imp.reserva).XBRL()) == imp.token, "reserva com token errado");
         require(ReservaBRL(imp.reserva).owner() == CREATOR_TREASURY, "dono da reserva divergente");
         require(address(EscrowTrabalho(imp.escrow).XBRL()) == imp.token, "escrow com token errado");

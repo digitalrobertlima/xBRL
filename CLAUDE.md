@@ -11,7 +11,7 @@
 ## 2. Endereços fixos
 | Item | Valor |
 |---|---|
-| `CREATOR_TREASURY` (taxa vitalícia 0,1%) | `0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1` |
+| `CREATOR_TREASURY` (taxa 0,1% na emissão/resgate/Escrow; dono da Reserva) | `0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1` |
 | Rede principal | Polygon PoS — chainId **137** |
 | Rede de teste | Polygon Amoy — chainId **80002** |
 | Lastro BRZ (Polygon, 18 casas) | `0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc` |
@@ -24,19 +24,21 @@
 Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>.json`, gerados **só** pelo script de deploy. Nunca escrever endereço de protocolo à mão no código.
 
 ## 3. Invariantes dos contratos (não negociáveis)
-1. **xBRL** — sem blacklist, sem pausa, sem congelamento, sem proxy/upgrade, sem `burnFrom` administrativo. Só a Reserva emite. `burn` só do próprio saldo. `inicializar` roda uma única vez e depois o token não tem nenhum papel administrativo.
-2. **Taxa de 0,1% (10 bps)** para o `CREATOR_TREASURY`, imutável: em transferências entre carteiras comuns (dentro do `_update`), na emissão e no resgate (Reserva) e em cada pagamento do Escrow. Reserva e Escrow são isentos no token para não quebrar contabilidade (cobram a taxa explicitamente).
-3. **Reserva** — `lastroTotal() >= totalSupply()` sempre (testado por fuzzing + invariantes). Fase 1 (< 1M xBRL): 1:1 estrito. Fase 2 (≥ 1M): spread dinâmico até 0,40% que **fica na reserva** (sobrecolateral), janela de resgate de 20% do supply/24 h. Resgate **nunca** pausável. Dono (= `CREATOR_TREASURY`, definido no construtor) só pode: propor lastro (ativa após 7 dias, por qualquer pessoa) e pausar a **emissão** de um lastro.
+1. **xBRL** — ERC-20 PADRÃO, **sem taxa na transferência** (decisão do dono, 24/11/2026: compatibilidade total com Uniswap, onde ele quer parear o xBRL). Sem blacklist, sem pausa, sem congelamento, sem proxy/upgrade, sem `burnFrom` administrativo. Só a Reserva emite. `burn` só do próprio saldo. `inicializar(reserva)` roda uma única vez.
+2. **Taxa de 0,1% (10 bps)** para o `CREATOR_TREASURY`, imutável, SOMENTE na emissão e no resgate (Reserva) e em cada pagamento do Escrow.
+3. **Reserva** — `lastroTotal() >= totalSupply()` sempre (fuzzing + invariantes). **Lista de lastros fixa no construtor** (BRZ, BRLA): não existe função para adicionar lastro. Spread de diversificação até 0,40% (com 2+ lastros e reserva ≥ 10.000) que **fica na reserva** como lastro extra. **Teto diário de emissão por lastro**: máx(50.000, 10% da reserva) a cada 24 h (anti-drenagem se um lastro perder a paridade). Fase 2 (supply ≥ 1M): resgate até 20% do supply/24 h. Resgate **nunca** pausável. Dono (= `CREATOR_TREASURY`) só pode pausar a **emissão** de um lastro. Roteiro: migrar para lastro em cripto supercolateralizada num contrato NOVO (v2), nunca dando poder de mint extra ao v1.
 4. **Sem rendimento.** Decisão do dono (24/11/2026): o protocolo não promete nem paga juros/rendimento. Não criar cofre, staking, APY ou qualquer texto de "rende X%".
-5. **Escrow** — 4 modalidades (Presencial, Entrega, Remoto, Etapas). Raio GPS 80 m (`RAIO_MAX_MM = 80_000`). Código de entrega: 5 palavras da lista BIP-39 em português (~55 bits, `wallet/src/palavras-pt.js`), normalizadas em minúsculas separadas por um espaço; hash `keccak256(abi.encode(escrow, cliente, codigo))`. Revisão 3 dias; disputa sem árbitro: acordo por propostas iguais ou 50/50 após 30 dias. Reputação Nível 0–5 (mesma regra em `EscrowTrabalho.nivel` e `wallet/src/escrow-client.js#calcularNivel` — mudou um, muda o outro).
+5. **Escrow** — 4 modalidades (Presencial, Entrega, Remoto, Etapas). **Sem GPS** (falsificável). PRESENCIAL exige **código de chegada** (`hashChegada = keccak256(abi.encode(escrow, cliente, "chegada", codigo))`) deixado no local pelo cliente (palavras + QR). ENTREGA exige **código de entrega** (`hashCodigo = keccak256(abi.encode(escrow, cliente, codigo))`). Códigos: 5 palavras BIP-39 em português (~55 bits), 6 a partir de 1.000 xBRL, normalizadas em minúsculas com um espaço (`wallet/src/palavras-pt.js`). Vaga aberta (exceto Entrega) exige `decidirCandidato` do cliente. Revisão 3 dias; disputa sem árbitro: propostas iguais ou 50/50 após 30 dias.
+   **Reputação anti-contas-falsas** (mesma regra em `EscrowTrabalho.nivel` e `escrow-client.js#calcularNivel` — mudou um, muda o outro): nível exige contrapartes distintas, avaliadores distintos (uma nota por par, a última vale), média, taxa de disputa, volume e idade da conta (N2: 5/3/3,5★/20%/500/14d · N3: 15/10/4,0/10%/5k/60d · N4: 40/25/4,5/5%/25k/180d · N5: 80/50/4,8/2%/100k/365d). Avaliação só em trabalhos ≥ 10 xBRL.
 6. Compilar com **zero warnings** (`deny = "warnings"` + forge-lint). Solidity `^0.8.24`, `evm_version = shanghai`.
 
 ## 4. Carteira (PWA) — regras
 - Máquina de estados em `wallet/src/app.js` (`TRANSICOES`): telas só mudam por transições declaradas; o "voltar" do aparelho não fura o bloqueio.
 - Chave: BIP-39 12 palavras (`m/44'/60'/0'/0/0`), cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
 - Mover dinheiro = **segurar para confirmar** (1,2 s). Desbloquear = **deslizar + PIN**.
-- Check-in: GPS com precisão ≤ 50 m e distância ≤ 80 m.
-- Tanque de gás: alvo 3,0 POL, gatilho 1,0 POL, slippage máximo 1%, aprovação exata (nunca infinita).
+- Chegada/entrega: código em palavras ou QR (gerado no aparelho com `vendor/qrcode.mjs`, MIT; leitura via `BarcodeDetector`, com digitação como alternativa). Nunca GPS.
+- Biometria (WebAuthn PRF) oferecida logo após criar o PIN.
+- Tanque de gás: alvo 3,0 POL, gatilho 1,0 POL, slippage máximo 1%, aprovação exata (nunca infinita), teto de preço R$ 5 / US$ 1 por POL contra cotação falsa.
 - Aprovações ERC-20 sempre do valor exato. Todo texto vindo da blockchain passa por `esc()`.
 - `ethers` v6 é vendorizado em `wallet/src/vendor/` (sem CDN). CSP restritiva no `<meta>`.
 
@@ -54,7 +56,7 @@ Fonte do sistema (arredondada), botões grandes, mobile-first, ícones emoji, va
 ```bash
 cd contracts
 forge build                       # zero warnings obrigatório (forge v1.10.0, fixado no CI)
-forge test                        # 60 testes (unit, fuzz, invariantes, integração, script)
+forge test                        # 63 testes (unit, fuzz, invariantes, integração, script)
 FOUNDRY_PROFILE=ci forge test     # fuzz com 2048 execuções
 node script/exportar-abis.cjs     # regenera wallet/src/abis.js depois de mudar contratos
 
@@ -75,5 +77,5 @@ O workflow de deploy commita `wallet/src/deployments/<chainId>.json` e dispara o
 ## 7. Antes de publicar
 1. `forge build` sem warnings e `forge test` 100% verde.
 2. ABIs regeneradas e commitadas.
-3. Testar a carteira de ponta a ponta (criar, emitir, resgatar, enviar, trabalho com código, bloquear/desbloquear) contra Anvil ou Amoy.
+3. Testar a carteira de ponta a ponta (criar, emitir, resgatar, enviar, entrega com código, presencial com código de chegada, vaga aberta com aprovação, avaliação, bloquear/desbloquear) contra Anvil ou Amoy.
 4. Contratos não auditados: não divulgar como "auditado"; manter os avisos de risco da landing.

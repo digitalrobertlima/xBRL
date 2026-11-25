@@ -12,51 +12,38 @@ export const PALAVRAS_CODIGO_ALTO_VALOR = 6; // 66 bits — a partir de 1.000 xB
 
 // --------------------------- Reputação ---------------------------
 
-/** Replica EscrowTrabalho.nivel(conta). Entrada: {concluidos, disputas, avaliacoes, somaEstrelas}. */
-export function calcularNivel(r) {
+const DIA = 86_400;
+const E18 = 10n ** 18n;
+/** Requisitos por nível (iguais a EscrowTrabalho.nivel): contrapartes, avaliadores, média×100, disputa máx (bps),
+ * volume mínimo (xBRL) e idade mínima (dias). */
+export const REGRAS_NIVEL = [
+  null,
+  null,
+  { contrapartes: 5, avaliacoes: 3, media: 350, disputa: 2_000, volume: 500n, idade: 14 },
+  { contrapartes: 15, avaliacoes: 10, media: 400, disputa: 1_000, volume: 5_000n, idade: 60 },
+  { contrapartes: 40, avaliacoes: 25, media: 450, disputa: 500, volume: 25_000n, idade: 180 },
+  { contrapartes: 80, avaliacoes: 50, media: 480, disputa: 200, volume: 100_000n, idade: 365 },
+];
+
+/** Replica EscrowTrabalho.nivel(conta). */
+export function calcularNivel(r, agora = Math.floor(Date.now() / 1000)) {
   const concluidos = Number(r.concluidos);
+  if (concluidos === 0) return 0;
   const disputas = Number(r.disputas);
   const avaliacoes = Number(r.avaliacoes);
-  const soma = Number(r.somaEstrelas);
-  if (concluidos === 0) return 0;
-  const media100 = avaliacoes === 0 ? 0 : Math.floor((soma * 100) / avaliacoes);
+  const media100 = avaliacoes === 0 ? 0 : Math.floor((Number(r.somaEstrelas) * 100) / avaliacoes);
   const disputaBps = Math.floor((disputas * 10_000) / (concluidos + disputas));
-  if (concluidos >= 100 && avaliacoes >= 50 && media100 >= 480 && disputaBps <= 200) return 5;
-  if (concluidos >= 50 && avaliacoes >= 25 && media100 >= 450 && disputaBps <= 500) return 4;
-  if (concluidos >= 20 && avaliacoes >= 10 && media100 >= 400 && disputaBps <= 1_000) return 3;
-  if (concluidos >= 5 && avaliacoes >= 3 && media100 >= 350 && disputaBps <= 2_000) return 2;
+  const idade = agora - Number(r.desde);
+  const volume = BigInt(r.volume);
+  for (let n = 5; n >= 2; n--) {
+    const q = REGRAS_NIVEL[n];
+    if (Number(r.contrapartes) >= q.contrapartes && avaliacoes >= q.avaliacoes && media100 >= q.media &&
+      disputaBps <= q.disputa && volume >= q.volume * E18 && idade >= q.idade * DIA) return n;
+  }
   return 1;
 }
 
 export const NOMES_NIVEL = ["Novo", "Iniciante", "Confiável", "Experiente", "Referência", "Lenda"];
-
-// --------------------------- Geodésia ---------------------------
-
-export const paraMicro = (graus) => Math.round(Number(graus) * 1e6);
-
-/** Mesma aproximação equirretangular do contrato (resultado em metros). */
-export function distanciaMetros(lat1, lon1, lat2, lon2) {
-  const k = 0.11119508; // metros por microdegrau
-  let dLon = lon2 - lon1;
-  if (dLon > 180e6) dLon -= 360e6;
-  if (dLon < -180e6) dLon += 360e6;
-  const c = Math.cos((((lat1 + lat2) / 2) * Math.PI) / 180e6);
-  const dy = (lat2 - lat1) * k;
-  const dx = dLon * k * c;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-/** Lê o GPS com alta precisão. Rejeita leituras imprecisas. */
-export function lerGps({ timeout = 20_000 } = {}) {
-  return new Promise((ok, erro) => {
-    if (!navigator.geolocation) return erro(new Error("Este aparelho não tem GPS disponível"));
-    navigator.geolocation.getCurrentPosition(
-      (p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude, precisao: p.coords.accuracy }),
-      (x) => erro(new Error(x.code === 1 ? "Permita o acesso à localização" : "Não foi possível ler o GPS")),
-      { enableHighAccuracy: true, maximumAge: 0, timeout },
-    );
-  });
-}
 
 // --------------------------- Código de entrega ---------------------------
 
@@ -81,6 +68,11 @@ export function normalizarCodigo(c) {
 export function codigoTemFormatoValido(c) {
   const p = normalizarCodigo(c).split(" ");
   return (p.length === PALAVRAS_CODIGO || p.length === PALAVRAS_CODIGO_ALTO_VALOR) && p.every((w) => PALAVRAS.includes(w));
+}
+
+/** keccak256(abi.encode(escrow, cliente, "chegada", codigo)) — igual a EscrowTrabalho.hashChegada. */
+export function hashChegada(escrow, cliente, codigo) {
+  return e().keccak256(e().AbiCoder.defaultAbiCoder().encode(["address", "address", "string", "string"], [escrow, cliente, "chegada", codigo]));
 }
 
 /** keccak256(abi.encode(escrow, cliente, codigo)) — igual a EscrowTrabalho.hashCodigo. */
@@ -184,10 +176,9 @@ export class EscrowClient {
           modalidade: Number(ev.args.modalidade),
           valor: BigInt(ev.args.valor),
           prazo: Number(ev.args.prazo),
-          lat: Number(ev.args.lat),
-          lon: Number(ev.args.lon),
           etapas: Number(ev.args.etapas),
           comCodigo: ev.args.comCodigo,
+          comChegada: ev.args.comChegada,
           descricao: String(ev.args.descricao || ""),
           bloco: ev.bloco,
           historico: [],
@@ -222,18 +213,17 @@ export class EscrowClient {
       etapasPagas: Number(t.etapasPagas),
       trabalhador: t.trabalhador,
       entregueEm: Number(t.entregueEm),
-      checkin: t.checkin,
+      chegou: t.chegou,
       clienteAvaliou: t.clienteAvaliou,
       trabalhadorAvaliou: t.trabalhadorAvaliou,
       pendenteAprovacao: t.pendenteAprovacao,
       valor: t.valor,
       pago: t.pago,
-      lat: Number(t.lat),
-      lon: Number(t.lon),
       disputaEm: Number(t.disputaEm),
       propostaCliente: Number(t.propostaCliente),
       propostaTrabalhador: Number(t.propostaTrabalhador),
       codigoHash: t.codigoHash,
+      chegadaHash: t.chegadaHash,
     };
   }
 
@@ -258,10 +248,11 @@ export class EscrowClient {
 
   async reputacao(conta) {
     const r = await this.contrato.reputacao(conta);
-    const dados = { concluidos: r[0], disputas: r[1], avaliacoes: r[2], somaEstrelas: r[3] };
+    const dados = { concluidos: r[0], disputas: r[1], avaliacoes: r[2], contrapartes: r[3], somaEstrelas: r[4], desde: r[5], volume: r[6] };
     const nivel = calcularNivel(dados);
     const media = Number(dados.avaliacoes) ? Number(dados.somaEstrelas) / Number(dados.avaliacoes) : 0;
-    return { ...dados, nivel, nomeNivel: NOMES_NIVEL[nivel], media };
+    const idadeDias = Number(dados.desde) ? Math.floor((Date.now() / 1000 - Number(dados.desde)) / 86_400) : 0;
+    return { ...dados, nivel, nomeNivel: NOMES_NIVEL[nivel], media, idadeDias };
   }
 
   /** Ações que a conta pode executar agora sobre o trabalho (espelha as regras do contrato). */
@@ -270,7 +261,7 @@ export class EscrowClient {
     const souCliente = t.cliente.toLowerCase() === eu;
     const souTrab = t.trabalhador.toLowerCase() === eu;
     const vaga = t.trabalhador === e().ZeroAddress;
-    const presencial = t.modalidade === 0 || t.modalidade === 1;
+    const presencial = t.modalidade === 0;
     const a = [];
     switch (t.estado) {
       case 0: // Aberto
@@ -284,9 +275,9 @@ export class EscrowClient {
         if (souCliente && agora > t.prazo) a.push("reembolsarPorPrazo");
         break;
       case 1: // Aceito
-        if (souTrab && presencial && !t.checkin) a.push("checkIn");
-        if (souTrab && t.modalidade !== 1 && (t.modalidade !== 0 || t.checkin)) a.push("marcarEntregue");
-        if (t.codigoHash !== e().ZeroHash && (!presencial || t.checkin) && (souTrab || souCliente)) a.push("confirmarComCodigo");
+        if (souTrab && presencial && !t.chegou) a.push("confirmarChegada");
+        if (souTrab && t.modalidade !== 1 && (!presencial || t.chegou)) a.push("marcarEntregue");
+        if (t.codigoHash !== e().ZeroHash && (!presencial || t.chegou) && (souTrab || souCliente)) a.push("confirmarComCodigo");
         if (souCliente) a.push("liberar");
         if (souTrab) a.push("desistir");
         if (souCliente || souTrab) a.push("abrirDisputa");
@@ -303,8 +294,10 @@ export class EscrowClient {
         if (agora >= t.disputaEm + ESCROW.prazoDisputaDias * 86400) a.push("resolverPorTempo");
         break;
       case 4: // Concluído
-        if (souCliente && !t.clienteAvaliou) a.push("avaliar");
-        if (souTrab && !t.trabalhadorAvaliou) a.push("avaliar");
+        if (BigInt(t.valor) >= BigInt(ESCROW.valorMinimoAvaliacao) * 10n ** 18n) {
+          if (souCliente && !t.clienteAvaliou) a.push("avaliar");
+          if (souTrab && !t.trabalhadorAvaliou) a.push("avaliar");
+        }
         break;
       default:
         break;

@@ -89,7 +89,7 @@
 <header>
   <div class="wrap">
     <a class="marca" href="#"><img src="wallet/icons/icon-192.png" alt=""><span>x<b>BRL</b></span></a>
-    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
+    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#uniswap">Uniswap</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
     <a class="cta ouro" href="wallet/">Abrir carteira</a>
   </div>
 </header>
@@ -109,9 +109,9 @@
   </div>
 
   <div class="faixa">
-    <div><b>100%</b>lastro em stablecoins de Real, auditável on-chain</div>
+    <div><b>≥100%</b>de lastro em stablecoins de Real, auditável on-chain</div>
     <div><b>0</b>botões de congelar, pausar ou confiscar saldo</div>
-    <div><b>0,1%</b>taxa única e transparente por movimentação</div>
+    <div><b>R$ 0</b>de taxa para transferir: xBRL é um token padrão, negociável na Uniswap</div>
     <div><b>0</b>servidores: carteira roda inteira no seu aparelho</div>
   </div>
 
@@ -119,35 +119,41 @@
     <h2>Como funciona</h2>
     <p class="sub">Três contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
     <div class="grade">
-      <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
+      <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade, sem taxa na transferência. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
       <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega BRZ ou BRLA e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
-      <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. GPS, código de entrega e reputação pública.</p></div>
+      <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. Códigos de chegada e de entrega (palavras + QR) e reputação pública.</p></div>
     </div>
   </section>
 
   <section id="reserva">
-    <h2>Lastro em duas fases</h2>
-    <p class="sub">A regra muda sozinha pelo volume em circulação. Em nenhuma fase o lastro pode ficar abaixo de 100% — isso é verificado por testes automáticos de fuzzing a cada mudança no código.</p>
-    <div class="fases">
-      <div class="card"><span class="selo">Fase 1 · até 1 milhão de xBRL</span><h3>Paridade estrita</h3>
-        <ul><li>Entra 1 real em stablecoin, sai 1 xBRL (menos 0,1%).</li><li>Resgate 1:1 a qualquer hora, sem limite.</li><li>Nada de spread, nada de janela.</li></ul></div>
-      <div class="card ouro"><span class="selo">Fase 2 · a partir de 1 milhão</span><h3>Estabilização algorítmica</h3>
-        <ul><li>Alvo de diversificação entre os lastros (1/N para cada).</li><li>Usar um lastro já concentrado paga spread de até 0,40% — que fica na reserva como lastro extra (&gt;100%).</li><li>Resgate de até 20% do total por 24 h, contra corrida bancária.</li><li>Novo lastro só entra com 7 dias de aviso público.</li></ul></div>
+    <h2>Lastro de verdade, com proteções automáticas</h2>
+    <p class="sub">Cada xBRL nasce de 1 real em stablecoin depositado na Reserva. Nenhuma regra abaixo depende de alguém apertar um botão — e nenhuma permite tirar o lastro de lá.</p>
+    <div class="grade duas">
+      <div class="card ouro"><h3>🔒 Lista de lastros fixa</h3><p>BRZ e BRLA foram gravados na criação do contrato. Ninguém — nem o criador — consegue incluir outro token. Não existe "lastro falso".</p></div>
+      <div class="card"><h3>⚖️ Lastro a mais</h3><p>Quem traz o lastro que já sobra na reserva paga até 0,40% extra, que fica guardado como lastro adicional. A reserva tende a ter mais de 100%.</p></div>
+      <div class="card"><h3>🚧 Teto diário por lastro</h3><p>No máximo 10% da reserva (mínimo 50 mil) entra por cada lastro a cada 24 h. Se um lastro perder a paridade, ninguém consegue trocá-lo pelo bom de uma vez.</p></div>
+      <div class="card"><h3>🏃 Sem corrida bancária</h3><p>Acima de 1 milhão em circulação, até 20% do total pode ser resgatado por dia. O resgate nunca pode ser pausado.</p></div>
     </div>
+    <p class="aviso" style="margin-top:18px">Seja honesto com você: BRZ e BRLA são emitidos por empresas que podem congelar endereços. O xBRL em si é inconfiscável, mas o lastro de hoje depende desses emissores. O próximo passo do projeto é migrar para lastro em cripto supercolateralizada, que ninguém congela.</p>
+  </section>
+
+  <section id="uniswap">
+    <h2>Negociável em qualquer lugar</h2>
+    <p class="sub">Sem taxa na transferência, o xBRL é um token ERC-20 padrão: entra em pools da Uniswap, carteiras e outros protocolos. Como a Reserva emite e resgata a R$ 1 (±0,1%), qualquer desvio de preço nas pools vira oportunidade de arbitragem que puxa o preço de volta para R$ 1.</p>
   </section>
 
   <section id="trabalho">
     <h2>Marketplace de trabalho, sem intermediário</h2>
     <p class="sub">O cliente trava o pagamento no contrato. O trabalhador recebe quando a regra da modalidade é cumprida. Taxa de 0,1% só no pagamento.</p>
     <div class="grade quatro">
-      <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>Check-in GPS a até 80 m do local. Libera pelo aceite, pelo código ou em 3 dias sem contestação.</p></div>
-      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>GPS no destino + código secreto de 5 palavras que só o destinatário tem. Código certo = pagamento na hora.</p></div>
+      <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>O trabalhador prova que chegou com o código/QR que fica no local — como no app de entrega do mercado. Nada de GPS falsificável.</p></div>
+      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>Código secreto de palavras (e QR) que só o destinatário tem. Código certo = pagamento na hora.</p></div>
       <div class="card"><div class="ic">💻</div><h3>Remoto</h3><p>Trabalhador marca entregue; cliente aprova ou, depois de 3 dias de silêncio, o valor é liberado.</p></div>
       <div class="card"><div class="ic">🧱</div><h3>Por etapas</h3><p>De 2 a 50 parcelas iguais, cada uma com a mesma regra do remoto.</p></div>
     </div>
     <div class="grade duas" style="margin-top:16px">
       <div class="card"><h3>⚖️ Disputa sem juiz</h3><p>Cada lado propõe uma divisão. Propostas iguais resolvem na hora. Sem acordo em 30 dias, qualquer pessoa executa 50/50.</p></div>
-      <div class="card"><h3>⭐ Reputação de 0 a 5</h3><p>Trabalhos concluídos, estrelas e taxa de disputas — tudo público e calculado pelo próprio contrato.</p></div>
+      <div class="card"><h3>⭐ Reputação que não se compra</h3><p>O nível (0 a 5) exige pessoas diferentes, avaliadores diferentes, volume e tempo real de conta. Repetir trabalhos falsos entre as mesmas contas não sobe ninguém de nível.</p></div>
     </div>
   </section>
 
@@ -155,7 +161,7 @@
     <h2>A carteira nativa</h2>
     <p class="sub">Um app instalável (PWA) para Android e iPhone, que funciona sem cadastro e sem servidor.</p>
     <ol class="passos">
-      <li><div><b>12 palavras são a sua conta.</b> Geradas no aparelho (padrão BIP-39) e cifradas com AES-256-GCM pelo seu PIN, ou pela biometria com chave no chip do celular.</div></li>
+      <li><div><b>12 palavras são a sua conta.</b> Geradas no aparelho (padrão BIP-39) e cifradas com AES-256-GCM. A carteira oferece biometria com a chave guardada no chip de segurança do celular.</div></li>
       <li><div><b>Tanque de gás transparente.</b> Guarda até 3,0 POL para as taxas da rede e reabastece trocando seus tokens na Uniswap, com perda máxima de 1% de preço.</div></li>
       <li><div><b>Telas travadas.</b> Dinheiro só se move segurando o botão de confirmar; a carteira bloqueia sozinha em 5 minutos.</div></li>
     </ol>
@@ -165,8 +171,8 @@
   <section id="seguranca">
     <h2>Segurança e honestidade</h2>
     <div class="grade">
-      <div class="card"><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo de ninguém.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar a taxa de 0,1%.</li><li>Atualizar os contratos.</li></ul></div>
-      <div class="card"><h3>O que o administrador pode</h3><ul><li>Propor novo lastro (entra só após 7 dias).</li><li>Pausar a <em>emissão</em> com um lastro que perdeu a paridade.</li></ul><p>Só isso — e está no código.</p></div>
+      <div class="card"><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo de ninguém.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar as taxas ou adicionar lastro.</li><li>Atualizar os contratos.</li></ul></div>
+      <div class="card"><h3>O que o administrador pode</h3><ul><li>Pausar a <em>emissão</em> com um lastro em crise. Nada mais.</li></ul><p>Só isso — e está no código.</p></div>
       <div class="card"><h3>Riscos que existem</h3><ul><li>Os lastros (BRZ, BRLA) dependem de seus emissores.</li><li>Os contratos têm testes amplos, mas ainda não passaram por auditoria externa.</li><li>Perder as 12 palavras = perder o acesso.</li></ul></div>
     </div>
   </section>
@@ -183,7 +189,7 @@
     <details><summary>xBRL é dinheiro de verdade?</summary><p>É um token que vale R$ 1 porque cada unidade é lastreada por R$ 1 em stablecoins de Real (BRZ, BRLA) guardadas no contrato da Reserva, e pode ser resgatada por elas a qualquer momento.</p></details>
     <details><summary>Preciso de cadastro?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para trocar reais por BRZ/BRLA você usa a corretora ou o emissor de sua preferência.</p></details>
     <details><summary>xBRL rende juros?</summary><p>Não. xBRL não promete nem paga rendimento. Ele é um Real digital que você controla sozinho.</p></details>
-    <details><summary>Quanto custa?</summary><p>0,1% por transferência entre carteiras, emissão, resgate ou pagamento de trabalho. A rede Polygon cobra centavos de POL por operação.</p></details>
+    <details><summary>Quanto custa?</summary><p>Transferir xBRL não tem taxa do protocolo. Emitir, resgatar e receber pagamento de trabalho custam 0,1%. A rede Polygon cobra centavos de POL por operação.</p></details>
     <details><summary>E se o site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby…).</p></details>
   </section>
 </main>

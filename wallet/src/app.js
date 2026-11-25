@@ -150,6 +150,7 @@ function traduzirErro(e) {
   const msg = String(e?.shortMessage || e?.message || e);
   if (/insufficient funds/i.test(msg)) return "POL insuficiente para a taxa da rede. Abasteça o tanque.";
   if (/user rejected|denied/i.test(msg)) return "Operação cancelada.";
+  if (/missing revert data|execution reverted|CALL_EXCEPTION/i.test(msg)) return "A rede recusou a operação. O mais comum é faltar xBRL (o valor fica travado) ou POL para a taxa. Confira os saldos na tela Início.";
   if (/network|fetch|timeout|failed to detect/i.test(msg)) return "Sem conexão com a rede Polygon. Verifique a internet.";
   return msg.length > 180 ? msg.slice(0, 180) + "…" : msg;
 }
@@ -1336,6 +1337,9 @@ async function criarTrabalho() {
   const m = Number(S.params.modalidade ?? 0);
   const valor = lerValor($("#tn-valor").value, 18);
   if (valor === 0n) throw new Error("Informe o pagamento");
+  const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
+  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} xBRL e o pagamento é ${fmt(valor)}. Pegue xBRL na aba Reserva (troque BRZ/BRLA/BRL1) e tente de novo.`);
+  if (saldoPol < E.parseEther("0.05")) throw new Error("Você precisa de um pouco de POL (uns 0,2) para pagar a taxa da rede. Mande POL para o seu endereço na tela Receber.");
   const dias = Math.max(1, Math.min(365, Number($("#tn-prazo").value) || 7));
   const trabTxt = $("#tn-trab").value.trim();
   if (trabTxt && !E.isAddress(trabTxt)) throw new Error("Endereço do trabalhador inválido");

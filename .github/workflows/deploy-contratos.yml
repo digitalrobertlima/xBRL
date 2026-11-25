@@ -84,7 +84,7 @@ jobs:
           test "$(cast chain-id --rpc-url "$RPC")" = "$CHAIN" || { echo "::error::RPC na rede errada"; exit 1; }
           test "$(cast code "$FABRICA" --rpc-url "$RPC")" != "0x" || { echo "::error::Fábrica CREATE2 ausente"; exit 1; }
           if [ "$CHAIN" = "137" ]; then
-            for t in 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc 0xE6A537a407488807F0bbeb0038B79004f19DDDFb 0x5C067C80C00eCd2345b05E83A3e758eF799C40B5 0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0; do
+            for t in 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc 0xE6A537a407488807F0bbeb0038B79004f19DDDFb 0x5C067C80C00eCd2345b05E83A3e758eF799C40B5; do
               d=$(cast call "$t" "decimals()(uint8)" --rpc-url "$RPC"); s=$(cast call "$t" "symbol()(string)" --rpc-url "$RPC")
               echo "Lastro $t = $s ($d casas)"
             done

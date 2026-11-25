@@ -1,6 +1,6 @@
 # xBRL — O Real Soberano & Inconfiscável (Polygon)
 
-**1 xBRL = R$ 1**, lastreado em stablecoins de Real (BRZ, BRLA, BRL1, wBRL) ou em cripto supercolateralizada (ETH, POL), sem congelamento, sem confisco, sem servidor.
+**1 xBRL = R$ 1**, lastreado em stablecoins de Real (BRZ, BRLA, BRL1) ou em cripto supercolateralizada (ETH, POL), sem congelamento, sem confisco, sem servidor.
 
 🧪 **Fase beta na Polygon** com limites baixos (reserva até R$ 1.000, cofre até R$ 500 por cripto).
 

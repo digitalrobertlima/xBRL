@@ -7,7 +7,7 @@ import { ABIS } from "./abis.js";
 
 export { ABIS };
 
-export const VERSAO = "1.0.0";
+export const VERSAO = "2.0.0-beta";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
 export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 
@@ -32,6 +32,10 @@ export const REDES = {
     tokens: [
       { simbolo: "BRZ", nome: "BRZ (Transfero)", endereco: "0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc", decimais: 18, lastro: true },
       { simbolo: "BRLA", nome: "BRLA (Avenia)", endereco: "0xE6A537a407488807F0bbeb0038B79004f19DDDFb", decimais: 18, lastro: true },
+      { simbolo: "BRL1", nome: "BRL1", endereco: "0x5C067C80C00eCd2345b05E83A3e758eF799C40B5", decimais: 6, lastro: true },
+      { simbolo: "wBRL", nome: "wBRL", endereco: "0xD76f5Faf6888e24D9F04Bf92a0c8B921FE4390e0", decimais: 18, lastro: true },
+      { simbolo: "WETH", nome: "Ether (WETH)", endereco: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimais: 18, cripto: true },
+      { simbolo: "WPOL", nome: "POL embrulhado", endereco: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270", decimais: 18, cripto: true },
       { simbolo: "USDC", nome: "USD Coin (nativo)", endereco: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimais: 6, moeda: "USD" },
     ],
     uniswap: {
@@ -86,12 +90,21 @@ export const ESCROW = {
   prazoDisputaDias: 30,
   valorMinimoAvaliacao: 10,
   modalidades: [
-    { id: 0, nome: "Presencial", icone: "🧹", resumo: "Serviço no local. O trabalhador prova que chegou com o código/QR que fica com você." },
-    { id: 1, nome: "Entrega", icone: "🛵", resumo: "Leva até o destino. O código/QR de quem recebe libera o pagamento na hora." },
+    { id: 0, nome: "Presencial", icone: "🧹", resumo: "Serviço no local. O trabalhador prova que chegou com o código/QR que fica com você (ou você mesmo confirma a chegada)." },
+    { id: 1, nome: "Entrega", icone: "🛵", resumo: "Leva até o destino. Só o código/QR de quem recebe libera o pagamento: sem código, sem entrega. Pode exigir caução do entregador." },
     { id: 2, nome: "Remoto", icone: "💻", resumo: "Trabalho digital. Aprovação ou 3 dias de silêncio." },
     { id: 3, nome: "Por etapas", icone: "🧱", resumo: "Projeto em parcelas iguais (2 a 50)." },
   ],
+  caucaoMinima: 200, // xBRL — só ENTREGA
+  prazoArbitrosDias: 3, // divergência dos árbitros antes do desempate do criador
   estados: ["Aberto", "Em execução", "Entregue", "Em disputa", "Concluído", "Cancelado"],
+};
+
+/** Cofre cripto (iguais ao contrato CofreCripto). */
+export const COFRE = {
+  taxaEmissaoBps: 50, // 0,5% somado à dívida (metade criador, metade colchão)
+  bonusLiquidacaoBps: 1000,
+  dividaMinima: 10,
 };
 
 export const SEGURANCA = {
@@ -107,7 +120,8 @@ export async function carregarImplantacao(chainId) {
     const r = await fetch(new URL(`./deployments/${chainId}.json`, import.meta.url), { cache: "no-cache" });
     if (!r.ok) return null;
     const j = await r.json();
-    if (Number(j.chainId) !== Number(chainId) || !j.xBRL) return null;
+    // Implantações antigas (sem cofre/mensageiro) usam ABIs diferentes: são ignoradas.
+    if (Number(j.chainId) !== Number(chainId) || !j.xBRL || !j.CofreCripto || !j.Mensageiro) return null;
     return j;
   } catch {
     return null;

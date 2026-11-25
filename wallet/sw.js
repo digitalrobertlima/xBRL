@@ -1,7 +1,7 @@
 // xBRL — Service Worker
 // Estratégia: rede primeiro para os arquivos do próprio site (atualização imediata a cada publicação),
 // cache como reserva para funcionar offline. Chamadas a RPCs (outros domínios) nunca são interceptadas.
-const VERSAO = "xbrl-wallet-v1.0.0";
+const VERSAO = "xbrl-wallet-v2.0.0-beta";
 const ARQUIVOS = [
   "./",
   "./index.html",
@@ -15,6 +15,7 @@ const ARQUIVOS = [
   "./src/keystore.js",
   "./src/gas-tank.js",
   "./src/escrow-client.js",
+  "./src/chat.js",
   "./src/palavras-pt.js",
   "./src/vendor/ethers.umd.min.js",
   "./src/vendor/qrcode.mjs",

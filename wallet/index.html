@@ -111,7 +111,7 @@
     .item .ic { font-size: 26px; }
     .item .meio { flex: 1; min-width: 0; }
     .item .meio b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .seg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; background: rgba(2,25,18,.6); padding: 4px; border-radius: 14px; margin: 10px 0; }
+    .seg { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; background: rgba(2,25,18,.6); padding: 4px; border-radius: 14px; margin: 10px 0; }
     .seg button { padding: 10px; border-radius: 10px; border: 0; background: none; font-weight: 700; color: var(--mudo); cursor: pointer; }
     .seg button[aria-pressed="true"] { background: var(--e700); color: var(--txt); }
     .modal { position: fixed; inset: 0; z-index: 20; background: rgba(2,25,18,.82); display: grid; place-items: center; padding: 24px; }
@@ -127,6 +127,10 @@
     .codigo { font-family: var(--fonte); font-weight: 800; font-size: 24px; letter-spacing: .5px; line-height: 1.5; text-align: center; color: var(--o300); background: rgba(2,25,18,.8); border: 2px dashed var(--o500); border-radius: 14px; padding: 14px; }
     .nivel { display: inline-flex; gap: 2px; color: var(--o400); }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+    details.cartao summary { cursor: pointer; padding: 4px 0; }
+    .msg { background: rgba(6,59,44,.7); border-radius: 14px 14px 14px 4px; padding: 8px 12px; margin: 8px 30px 8px 0; }
+    .msg.minha { background: rgba(184,144,31,.22); border-radius: 14px 14px 4px 14px; margin: 8px 0 8px 30px; }
+    .msg p { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; }
   </style>
 </head>
 <body>

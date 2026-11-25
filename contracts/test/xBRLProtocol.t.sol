@@ -67,26 +67,19 @@ abstract contract Base is Test {
     address internal relayer = makeAddr("relayer");
     address internal dono = makeAddr("dono");
 
-    // Praça da Liberdade, Belo Horizonte (microdegraus)
-    int32 internal constant LAT = -19_932_000;
-    int32 internal constant LON = -43_938_000;
-
     function setUp() public virtual {
         (alice, alicePk) = makeAddrAndKey("alice");
         brz = new MockBRL("BRZ", "BRZ", 18);
         brla = new MockBRL("BRLA", "BRLA", 6);
-        token = new xBRL(TREASURY, address(this));
+        token = new xBRL(address(this));
         address[] memory lastros = new address[](2);
         lastros[0] = address(brz);
         lastros[1] = address(brla);
         reserva = new ReservaBRL(address(token), TREASURY, lastros, dono);
         escrow = new EscrowTrabalho(address(token), TREASURY);
-        address[] memory isentos = new address[](1);
-        isentos[0] = address(escrow);
-        token.inicializar(address(reserva), isentos);
+        token.inicializar(address(reserva));
     }
 
-    /// @dev Emite xBRL para `quem` depositando `valor18` de BRZ. Retorna o líquido recebido.
     function _emitirBrz(address quem, uint256 valor18) internal returns (uint256 liquido) {
         brz.mint(quem, valor18);
         vm.startPrank(quem);
@@ -103,6 +96,21 @@ abstract contract Base is Test {
         vm.stopPrank();
     }
 
+    /// @dev Faz a reserva crescer dia a dia, equilibrada entre BRZ e BRLA, respeitando o teto diário.
+    function _crescerAte(address quem, uint256 supplyAlvo) internal {
+        while (token.totalSupply() < supplyAlvo) {
+            uint256 falta = supplyAlvo - token.totalSupply();
+            uint256 metade = falta / 2 + 1e18;
+            uint256 dz = reserva.emissaoDisponivelNaJanela(address(brz));
+            uint256 dl = reserva.emissaoDisponivelNaJanela(address(brla));
+            uint256 vz = metade < dz ? metade : dz;
+            uint256 vl = metade < dl ? metade : dl;
+            if (vz > 1e18) _emitirBrz(quem, vz);
+            if (vl > 1e18) _emitirBrla(quem, vl / 1e12);
+            vm.warp(block.timestamp + 1 days);
+        }
+    }
+
     function _lastroCobreSupply() internal view {
         assertGe(reserva.lastroTotal(), token.totalSupply(), "INVARIANTE: lastro < supply");
     }
@@ -117,38 +125,28 @@ contract XBRLTokenTest is Base {
         assertEq(token.name(), "xBRL Real Soberano");
         assertEq(token.symbol(), "xBRL");
         assertEq(token.decimals(), 18);
-        assertEq(token.CREATOR_TREASURY(), TREASURY);
-        assertEq(token.TAXA_BPS(), 10);
         assertEq(token.reserva(), address(reserva));
         assertTrue(token.inicializado());
-        assertTrue(token.isentoDeTaxa(address(escrow)));
-        assertTrue(token.isentoDeTaxa(address(reserva)));
-        assertTrue(token.isentoDeTaxa(TREASURY));
-        assertFalse(token.isentoDeTaxa(alice));
     }
 
     function test_InicializarSoUmaVez() public {
-        address[] memory vazio = new address[](0);
         vm.expectRevert(xBRL.NaoAutorizado.selector);
-        token.inicializar(address(0xBEEF), vazio);
+        token.inicializar(address(0xBEEF));
     }
 
     function test_InicializarSoPeloInicializador() public {
-        xBRL t = new xBRL(TREASURY, carol);
-        address[] memory vazio = new address[](0);
+        xBRL t = new xBRL(carol);
         vm.prank(bob);
         vm.expectRevert(xBRL.NaoAutorizado.selector);
-        t.inicializar(address(0xBEEF), vazio);
+        t.inicializar(address(0xBEEF));
         vm.prank(carol);
         vm.expectRevert(xBRL.EnderecoZero.selector);
-        t.inicializar(address(0), vazio);
+        t.inicializar(address(0));
     }
 
     function test_ConstrutorRejeitaZero() public {
         vm.expectRevert(xBRL.EnderecoZero.selector);
-        new xBRL(address(0), carol);
-        vm.expectRevert(xBRL.EnderecoZero.selector);
-        new xBRL(TREASURY, address(0));
+        new xBRL(address(0));
     }
 
     function test_SoReservaEmite() public {
@@ -159,45 +157,24 @@ contract XBRLTokenTest is Base {
         token.mint(alice, 1e18);
     }
 
-    function test_TaxaDeZeroVirgulaUmPorCento() public {
-        _emitirBrz(alice, 1_000e18);
-        uint256 treasuryAntes = token.balanceOf(TREASURY);
+    function testFuzz_TransferenciaSemTaxa(uint96 valor) public {
+        _emitirBrz(alice, 5_000e18);
+        uint256 v = bound(uint256(valor), 0, token.balanceOf(alice));
+        uint256 supply = token.totalSupply();
         vm.prank(alice);
-        assertTrue(token.transfer(bob, 100e18));
-        assertEq(token.balanceOf(bob), 99.9e18);
-        assertEq(token.balanceOf(TREASURY) - treasuryAntes, 0.1e18);
-        assertEq(token.balanceOf(alice), 999e18 - 100e18);
+        assertTrue(token.transfer(bob, v));
+        assertEq(token.balanceOf(bob), v, "chega integral (compativel com Uniswap)");
+        assertEq(token.totalSupply(), supply);
     }
 
-    function test_TaxaEmTransferFrom() public {
+    function test_TransferFromSemTaxa() public {
         _emitirBrz(alice, 1_000e18);
         vm.prank(alice);
         token.approve(carol, 50e18);
         vm.prank(carol);
         assertTrue(token.transferFrom(alice, bob, 50e18));
-        assertEq(token.balanceOf(bob), 49.95e18);
+        assertEq(token.balanceOf(bob), 50e18);
         assertEq(token.allowance(alice, carol), 0);
-    }
-
-    function testFuzz_TaxaConservaValor(uint256 valor) public view {
-        valor = bound(valor, 0, type(uint128).max);
-        (uint256 liquido, uint256 taxa) = token.previewTransferencia(alice, bob, valor);
-        assertEq(liquido + taxa, valor);
-        assertEq(taxa, (valor * 10) / 10_000);
-        (liquido, taxa) = token.previewTransferencia(alice, address(escrow), valor);
-        assertEq(taxa, 0);
-        assertEq(liquido, valor);
-    }
-
-    function testFuzz_TransferenciaRealConfereComPreview(uint96 valor) public {
-        _emitirBrz(alice, 10_000_000e18);
-        uint256 v = bound(uint256(valor), 1, 9_000_000e18);
-        (uint256 liquido,) = token.previewTransferencia(alice, bob, v);
-        uint256 supplyAntes = token.totalSupply();
-        vm.prank(alice);
-        assertTrue(token.transfer(bob, v));
-        assertEq(token.balanceOf(bob), liquido);
-        assertEq(token.totalSupply(), supplyAntes, "taxa nao cria nem destroi xBRL");
     }
 
     function test_BurnSoDoProprioSaldo() public {
@@ -234,12 +211,11 @@ contract XBRLTokenTest is Base {
         bytes memory sig = _assinar(p, alicePk, token.nonces(alice));
         vm.prank(relayer);
         token.transferWithGas(p, sig);
-        assertEq(token.balanceOf(bob), 99.9e18);
-        assertEq(token.balanceOf(relayer), 0.999e18);
+        assertEq(token.balanceOf(bob), 100e18);
+        assertEq(token.balanceOf(relayer), 1e18);
         assertEq(token.balanceOf(alice), 999e18 - 101e18);
         assertEq(token.nonces(alice), 1);
 
-        // replay: o nonce mudou, a assinatura não vale mais
         vm.prank(relayer);
         vm.expectRevert(xBRL.AssinaturaInvalida.selector);
         token.transferWithGas(p, sig);
@@ -258,7 +234,7 @@ contract XBRLTokenTest is Base {
         bytes memory sig = _assinar(p, alicePk, 0);
         vm.prank(carol);
         token.transferWithGas(p, sig);
-        assertEq(token.balanceOf(bob), 9.99e18);
+        assertEq(token.balanceOf(bob), 10e18);
         assertEq(token.balanceOf(carol), 0);
     }
 
@@ -347,11 +323,11 @@ contract ReservaBRLTest is Base {
     function test_ColateralizacaoSemSupply() public view {
         assertEq(reserva.colateralizacaoBps(), type(uint256).max);
         assertEq(reserva.resgateDisponivelNaJanela(), type(uint256).max);
+        assertEq(reserva.emissaoDisponivelNaJanela(address(brz)), 50_000e18);
     }
 
     function test_EmitirSeisCasas() public {
-        uint256 liquido = _emitirBrla(alice, 1_000e6);
-        assertEq(liquido, 999e18);
+        assertEq(_emitirBrla(alice, 1_000e6), 999e18);
         assertEq(reserva.lastroTotal(), 1_000e18);
     }
 
@@ -378,7 +354,6 @@ contract ReservaBRLTest is Base {
         assertEq(brz.balanceOf(alice), 499.5e18);
         assertEq(token.balanceOf(TREASURY), 1.5e18);
         assertEq(token.totalSupply(), 500.5e18);
-        assertEq(brz.balanceOf(address(reserva)), 500.5e18);
         _lastroCobreSupply();
     }
 
@@ -386,10 +361,8 @@ contract ReservaBRLTest is Base {
         _emitirBrla(alice, 1_000e6);
         vm.startPrank(alice);
         token.approve(address(reserva), type(uint256).max);
-        uint256 pago = reserva.resgatar(address(brla), 1e18 + 123, 0);
+        assertEq(reserva.resgatar(address(brla), 1e18 + 123, 0), 999_000);
         vm.stopPrank();
-        // bruto = (1e18+123) - taxa(1e15) = 0.999e18 + 123 → 999000 (6 casas), sobra pó na reserva
-        assertEq(pago, 999_000);
         _lastroCobreSupply();
     }
 
@@ -432,6 +405,8 @@ contract ReservaBRLTest is Base {
         reserva.cotarEmissao(address(x), 1e18);
         vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LastroDesconhecido.selector, address(x)));
         reserva.cotarResgate(address(x), 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LastroDesconhecido.selector, address(x)));
+        reserva.emissaoDisponivelNaJanela(address(x));
     }
 
     function test_PausaEmissaoNaoBloqueiaResgate() public {
@@ -462,119 +437,154 @@ contract ReservaBRLTest is Base {
         reserva.definirEmissaoAtiva(address(0xABC), false);
     }
 
-    function test_NovoLastroSoComPrazoDeSeteDias() public {
-        MockBRL novo = new MockBRL("BRL1", "BRL1", 18);
-        vm.prank(bob);
-        vm.expectRevert();
-        reserva.proporLastro(address(novo));
-
-        vm.prank(dono);
-        reserva.proporLastro(address(novo));
-        vm.prank(dono);
-        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LastroJaExiste.selector, address(novo)));
-        reserva.proporLastro(address(novo));
-
-        uint64 libera = uint64(block.timestamp + 7 days);
-        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.PrazoNaoCumprido.selector, libera));
-        reserva.ativarLastro(address(novo));
-
-        vm.warp(block.timestamp + 7 days);
-        vm.prank(carol); // qualquer pessoa ativa
-        reserva.ativarLastro(address(novo));
-        assertEq(reserva.listaLastros().length, 3);
-        (bool aceito, bool emissao, uint8 dec,) = reserva.lastros(address(novo));
-        assertTrue(aceito && emissao);
-        assertEq(dec, 18);
-
-        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LastroDesconhecido.selector, address(novo)));
-        reserva.ativarLastro(address(novo));
+    function test_ListaDeLastrosImutavel() public {
+        // Não existe nenhuma função para adicionar lastro: chamadas com esses seletores falham.
+        MockBRL falso = new MockBRL("FAKE", "FAKE", 18);
+        vm.startPrank(dono);
+        (bool ok1,) = address(reserva).call(abi.encodeWithSignature("proporLastro(address)", address(falso)));
+        (bool ok2,) = address(reserva).call(abi.encodeWithSignature("ativarLastro(address)", address(falso)));
+        vm.stopPrank();
+        assertFalse(ok1);
+        assertFalse(ok2);
+        assertEq(reserva.listaLastros().length, 2);
     }
 
-    function test_LastroComMaisDe18CasasRejeitado() public {
-        MockBRL ruim = new MockBRL("R", "R", 24);
-        vm.prank(dono);
-        reserva.proporLastro(address(ruim));
-        vm.warp(block.timestamp + 7 days);
+    function test_ConstrutorValidaLastros() public {
+        address[] memory vazio = new address[](0);
+        vm.expectRevert(ReservaBRL.QuantidadeDeLastrosInvalida.selector);
+        new ReservaBRL(address(token), TREASURY, vazio, dono);
+
+        address[] memory nove = new address[](9);
+        vm.expectRevert(ReservaBRL.QuantidadeDeLastrosInvalida.selector);
+        new ReservaBRL(address(token), TREASURY, nove, dono);
+
+        address[] memory dup = new address[](2);
+        dup[0] = address(brz);
+        dup[1] = address(brz);
+        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LastroJaExiste.selector, address(brz)));
+        new ReservaBRL(address(token), TREASURY, dup, dono);
+
+        address[] memory ruim = new address[](1);
+        ruim[0] = address(new MockBRL("R", "R", 24));
         vm.expectRevert(abi.encodeWithSelector(ReservaBRL.DecimaisInvalidos.selector, 24));
-        reserva.ativarLastro(address(ruim));
+        new ReservaBRL(address(token), TREASURY, ruim, dono);
+
+        address[] memory zero = new address[](1);
+        vm.expectRevert(ReservaBRL.EnderecoZero.selector);
+        new ReservaBRL(address(token), TREASURY, zero, dono);
     }
 
     function test_LastroComTaxaNaTransferencia() public {
         MockTaxado tax = new MockTaxado();
-        vm.prank(dono);
-        reserva.proporLastro(address(tax));
-        vm.warp(block.timestamp + 7 days);
-        reserva.ativarLastro(address(tax));
+        address[] memory l = new address[](1);
+        l[0] = address(tax);
+        xBRL t2 = new xBRL(address(this));
+        ReservaBRL r2 = new ReservaBRL(address(t2), TREASURY, l, dono);
+        t2.inicializar(address(r2));
         tax.mint(alice, 100e18);
         vm.startPrank(alice);
-        tax.approve(address(reserva), 100e18);
-        uint256 liquido = reserva.emitir(address(tax), 100e18, 0);
+        tax.approve(address(r2), 100e18);
+        assertEq(r2.emitir(address(tax), 100e18, 0), 98.901e18); // entrou 99 → 99 - 0,099
         vm.stopPrank();
-        assertEq(liquido, 98.901e18); // entrou 99 → 99 - 0,099
-        _lastroCobreSupply();
+        assertGe(r2.lastroTotal(), t2.totalSupply());
     }
 
-    function test_Fase2ConcentracaoESpread() public {
-        _emitirBrz(alice, 600_000e18);
-        assertEq(reserva.fase(), 1);
-        _emitirBrla(bob, 600_000e6);
-        assertEq(reserva.fase(), 2);
+    function test_SpreadDeConcentracaoViraLastroExtra() public {
+        _emitirBrz(alice, 5_000e18); // reserva < 10.000: sem spread
+        assertEq(token.balanceOf(alice), 4_995e18);
+        // Tudo em BRZ (100% > 60%): spread máximo de 0,40%
+        (uint256 l, uint256 t, uint256 s) = reserva.cotarEmissao(address(brz), 10_000e18);
+        assertEq(t, 10e18);
+        assertEq(s, 40e18);
+        assertEq(l, 9_950e18);
+        assertEq(_emitirBrz(carol, 10_000e18), 9_950e18);
+        assertEq(reserva.lastroTotal() - token.totalSupply(), 40e18, "spread fica como lastro a mais");
 
-        // BRZ vai a 53,84% (alvo 50%): spread = 100.000 x 384 x 40 / (1000 x 10000) = 153,6
-        (uint256 l, uint256 t, uint256 s) = reserva.cotarEmissao(address(brz), 100_000e18);
-        assertEq(t, 100e18);
-        assertEq(s, 153.6e18);
-        assertEq(l, 99_746.4e18);
-        assertEq(_emitirBrz(carol, 100_000e18), 99_746.4e18);
-        _lastroCobreSupply();
-        assertGt(reserva.lastroTotal(), token.totalSupply(), "spread vira sobrecolateral");
-
-        // A partir de 60% o spread trava no máximo (0,40%), sem bloquear ninguém
-        (, t, s) = reserva.cotarEmissao(address(brz), 300_000e18);
-        assertEq(t, 300e18);
-        assertEq(s, 1_200e18);
-        assertEq(_emitirBrz(carol, 300_000e18), 298_500e18);
-        _lastroCobreSupply();
-
-        // O lastro escasso entra sem spread
+        // Quem traz o lastro que falta (BRLA, abaixo de 50%) não paga spread
         (,, s) = reserva.cotarEmissao(address(brla), 10_000e6);
         assertEq(s, 0);
+        assertEq(_emitirBrla(bob, 10_000e6), 9_990e18);
+        _lastroCobreSupply();
     }
 
-    function test_Fase2SpreadNoResgateDoLastroEscasso() public {
-        _emitirBrz(alice, 700_000e18);
-        _emitirBrla(bob, 500_000e6);
-        assertEq(reserva.fase(), 2);
-        // Resgatar BRLA (já abaixo do alvo de 50%) paga spread; resgatar BRZ (acima) não.
-        (uint256 pagoBrla,, uint256 sBrla) = reserva.cotarResgate(address(brla), 10_000e18);
-        (uint256 pagoBrz,, uint256 sBrz) = reserva.cotarResgate(address(brz), 10_000e18);
+    function test_SpreadNoResgateDoLastroEscasso() public {
+        _emitirBrz(alice, 15_000e18);
+        _emitirBrla(bob, 10_000e6);
+        // Resgatar BRLA (vai ficar abaixo do alvo de 50%) paga spread; resgatar BRZ (acima) não.
+        (uint256 pagoBrla,, uint256 sBrla) = reserva.cotarResgate(address(brla), 5_000e18);
+        (uint256 pagoBrz,, uint256 sBrz) = reserva.cotarResgate(address(brz), 5_000e18);
         assertGt(sBrla, 0);
+        assertLe(sBrla, (4_995e18 * 40) / 10_000);
         assertEq(sBrz, 0);
-        assertEq(pagoBrz, 9_990e18);
-        assertLt(pagoBrla * 1e12, 9_990e18);
-
+        assertEq(pagoBrz, 4_995e18);
+        assertLt(pagoBrla * 1e12, 4_995e18);
         vm.startPrank(bob);
-        token.approve(address(reserva), 10_000e18);
-        assertEq(reserva.resgatar(address(brla), 10_000e18, 0), pagoBrla);
+        token.approve(address(reserva), 5_000e18);
+        assertEq(reserva.resgatar(address(brla), 5_000e18, 0), pagoBrla);
         vm.stopPrank();
+        _lastroCobreSupply();
+    }
+
+    function test_TetoDiarioDeEmissaoPorLastro() public {
+        _emitirBrz(alice, 50_000e18);
+        assertEq(reserva.emissaoDisponivelNaJanela(address(brz)), 0);
+        brz.mint(alice, 1e18);
+        vm.startPrank(alice);
+        brz.approve(address(reserva), 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LimiteEmissaoDiaria.selector, 0));
+        reserva.emitir(address(brz), 1e18, 0);
+        vm.stopPrank();
+
+        // O teto é por lastro: BRLA segue livre
+        _emitirBrla(bob, 1_000e6);
+        // Depois de 24 h, BRZ volta
+        vm.warp(block.timestamp + 1 days);
+        _emitirBrz(alice, 1e18);
+        _lastroCobreSupply();
+    }
+
+    function test_TetoDiarioCresceComAReserva() public {
+        _crescerAte(alice, 1_000_000e18);
+        uint256 total = reserva.lastroTotal();
+        vm.warp(block.timestamp + 1 days);
+        assertEq(reserva.emissaoDisponivelNaJanela(address(brz)), (total * 1_000) / 10_000);
+    }
+
+    function test_LastroQuePerdeParidadeNaoDrenaOOutroDeUmaVez() public {
+        _crescerAte(alice, 1_000_000e18);
+        vm.warp(block.timestamp + 1 days);
+        uint256 brlaAntes = brla.balanceOf(address(reserva));
+        // Atacante tem BRZ "podre" ilimitado e tenta trocar por BRLA bom num só dia.
+        address atacante = makeAddr("atacante");
+        uint256 limite = reserva.emissaoDisponivelNaJanela(address(brz));
+        brz.mint(atacante, 1_000_000e18);
+        vm.startPrank(atacante);
+        brz.approve(address(reserva), type(uint256).max);
+        vm.expectRevert();
+        reserva.emitir(address(brz), 1_000_000e18, 0);
+        uint256 obtido = reserva.emitir(address(brz), limite, 0);
+        token.approve(address(reserva), type(uint256).max);
+        reserva.resgatar(address(brla), obtido, 0);
+        vm.expectRevert();
+        reserva.emitir(address(brz), 1e18, 0);
+        vm.stopPrank();
+        uint256 drenado = (brlaAntes - brla.balanceOf(address(reserva))) * 1e12;
+        assertLe(drenado, (reserva.lastroTotal() * 1_200) / 10_000, "no maximo ~10% da reserva por dia");
         _lastroCobreSupply();
     }
 
     function test_Fase2JanelaDeResgate() public {
-        _emitirBrz(alice, 600_000e18);
-        _emitirBrla(alice, 600_000e6);
-        uint256 supply = token.totalSupply(); // 1.200.000
-        uint256 limite = (supply * 2_000) / 10_000; // 240.000
+        _crescerAte(alice, 1_200_000e18);
+        assertEq(reserva.fase(), 2);
+        uint256 limite = (token.totalSupply() * 2_000) / 10_000;
         assertEq(reserva.resgateDisponivelNaJanela(), limite);
-
         vm.startPrank(alice);
         token.approve(address(reserva), type(uint256).max);
-        reserva.resgatar(address(brz), 200_000e18, 0); // queima 199.800
-        uint256 disponivel = limite - 199_800e18;
+        reserva.resgatar(address(brz), 100_000e18, 0); // queima 99.900
+        uint256 disponivel = limite - 99_900e18;
         assertEq(reserva.resgateDisponivelNaJanela(), disponivel);
         vm.expectRevert(abi.encodeWithSelector(ReservaBRL.LimiteJanelaResgate.selector, disponivel));
-        reserva.resgatar(address(brz), 100_000e18, 0);
-
+        reserva.resgatar(address(brz), disponivel + 1_000e18, 0);
         vm.warp(block.timestamp + 1 days);
         reserva.resgatar(address(brz), 100_000e18, 0);
         vm.stopPrank();
@@ -582,8 +592,8 @@ contract ReservaBRLTest is Base {
     }
 
     function testFuzz_InvarianteLastro(uint96 a, uint96 b, uint96 r1, uint96 r2) public {
-        uint256 va = bound(uint256(a), 1e15, 2_000_000e18);
-        uint256 vb = bound(uint256(b), 1, 2_000_000e6);
+        uint256 va = bound(uint256(a), 1e15, 50_000e18);
+        uint256 vb = bound(uint256(b), 1, 50_000e6);
         _emitirBrz(alice, va);
         _emitirBrla(alice, vb);
         _lastroCobreSupply();
@@ -603,7 +613,7 @@ contract ReservaBRLTest is Base {
     }
 }
 
-/// @dev Handler para teste de invariante com sequências aleatórias de emissões e resgates.
+/// @dev Handler para teste de invariante com sequências aleatórias de emissões, resgates e transferências.
 contract HandlerReserva is Test {
     ReservaBRL internal reserva;
     xBRL internal token;
@@ -624,7 +634,7 @@ contract HandlerReserva is Test {
     function emitir(uint256 ator, bool usaBrz, uint256 valor) external {
         address quem = atores[ator % atores.length];
         MockBRL l = usaBrz ? brz : brla;
-        valor = usaBrz ? bound(valor, 1e12, 500_000e18) : bound(valor, 1, 500_000e6);
+        valor = usaBrz ? bound(valor, 1e12, 60_000e18) : bound(valor, 1, 60_000e6);
         l.mint(quem, valor);
         vm.startPrank(quem);
         l.approve(address(reserva), valor);
@@ -681,92 +691,99 @@ contract ReservaInvarianteTest is Base {
 contract EscrowTrabalhoTest is Base {
     address internal cliente;
     address internal trab;
+    string internal constant CHEGADA = "porta janela cadeira mesa tapete";
+    string internal constant CODIGO = "vogal imunizar nordeste sapato haver";
 
     function setUp() public override {
         super.setUp();
         cliente = carol;
         trab = bob;
-        _emitirBrz(cliente, 100_000e18);
+        deal(address(token), cliente, 1_000_000e18, true);
         vm.prank(cliente);
         token.approve(address(escrow), type(uint256).max);
     }
 
-    function _novo(EscrowTrabalho.Modalidade m, address t, uint128 valor, uint8 etapas, bytes32 codigoHash)
-        internal
-        returns (uint256 id)
-    {
+    function _novoDe(
+        address quem,
+        EscrowTrabalho.Modalidade m,
+        address t,
+        uint128 valor,
+        uint8 etapas,
+        bytes32 codigoHash,
+        bytes32 chegadaHash
+    ) internal returns (uint256 id) {
         EscrowTrabalho.NovoTrabalho memory p = EscrowTrabalho.NovoTrabalho({
             modalidade: m,
             trabalhador: t,
             valor: valor,
             prazo: uint64(block.timestamp + 7 days),
-            lat: LAT,
-            lon: LON,
             etapas: etapas,
             codigoHash: codigoHash,
+            chegadaHash: chegadaHash,
             descricao: "Faxina completa, 3 quartos"
         });
-        vm.prank(cliente);
+        vm.prank(quem);
         id = escrow.criarTrabalho(p);
+    }
+
+    function _novo(EscrowTrabalho.Modalidade m, address t, uint128 valor, uint8 etapas, bytes32 codigoHash)
+        internal
+        returns (uint256)
+    {
+        bytes32 ch =
+            m == EscrowTrabalho.Modalidade.Presencial ? escrow.hashChegada(cliente, CHEGADA) : bytes32(0);
+        return _novoDe(cliente, m, t, valor, etapas, codigoHash, ch);
     }
 
     function _estado(uint256 id) internal view returns (EscrowTrabalho.Estado) {
         return escrow.trabalho(id).estado;
     }
 
-    // ---------------- GPS ----------------
-
-    function test_DistanciaConhecida() public view {
-        // 450 µ° de latitude ≈ 50,04 m
-        assertApproxEqAbs(escrow.distanciaMm(LAT, LON, LAT + 450, LON), 50_038, 5);
-        // 574 µ° de longitude a -19,93° ≈ 60,0 m (cos ≈ 0,94008)
-        assertApproxEqAbs(escrow.distanciaMm(LAT, LON, LAT, LON + 574), 60_002, 60);
-        // 1 grau de latitude ≈ 111.195 m
-        assertApproxEqAbs(escrow.distanciaMm(0, 0, 1_000_000, 0), 111_195_080, 1);
-        // No equador, 1 grau de longitude também
-        assertApproxEqAbs(escrow.distanciaMm(0, 0, 0, 1_000_000), 111_195_080, 10);
-        assertEq(escrow.distanciaMm(LAT, LON, LAT, LON), 0);
+    function _concluirRemoto(address c, address t, uint128 valor) internal returns (uint256 id) {
+        id = _novoDe(c, EscrowTrabalho.Modalidade.Remoto, t, valor, 1, 0, 0);
+        vm.prank(t);
+        escrow.aceitar(id);
+        vm.prank(c);
+        escrow.liberar(id);
     }
 
-    function testFuzz_DistanciaSimetrica(int32 a, int32 b, int16 da, int16 db) public view {
-        int32 lat = int32(bound(int256(a), -80_000_000, 80_000_000));
-        int32 lon = int32(bound(int256(b), -179_000_000, 179_000_000));
-        int32 lat2 = lat + int32(da);
-        int32 lon2 = lon + int32(db);
-        uint256 d1 = escrow.distanciaMm(lat, lon, lat2, lon2);
-        uint256 d2 = escrow.distanciaMm(lat2, lon2, lat, lon);
-        assertEq(d1, d2);
-        // Nunca maior que a distância só pela soma dos eixos sem correção de cosseno.
-        uint256 absA = uint256(da < 0 ? -int256(da) : int256(da));
-        uint256 absB = uint256(db < 0 ? -int256(db) : int256(db));
-        uint256 maxMm = ((absA + absB) * 111_196) / 1000 + 1;
-        assertLe(d1, maxMm);
+    // ---------------- Chegada por código (sem GPS) ----------------
+
+    function test_PresencialExigeCodigoDeChegada() public {
+        vm.expectRevert(EscrowTrabalho.CodigoObrigatorio.selector);
+        _novoDe(cliente, EscrowTrabalho.Modalidade.Presencial, trab, 1e18, 1, 0, 0);
+        vm.expectRevert(EscrowTrabalho.ModalidadeInvalida.selector);
+        _novoDe(cliente, EscrowTrabalho.Modalidade.Remoto, trab, 1e18, 1, 0, keccak256("x"));
     }
 
-    function test_CheckInForaDoRaio() public {
-        uint256 id = _novo(EscrowTrabalho.Modalidade.Presencial, trab, 100e18, 1, 0);
+    function test_ChegadaComCodigoErradoOuDeOutroDominio() public {
+        bytes32 h = escrow.hashCodigo(cliente, CODIGO);
+        uint256 id = _novo(EscrowTrabalho.Modalidade.Presencial, trab, 100e18, 1, h);
         vm.startPrank(trab);
         escrow.aceitar(id);
-        uint256 d = escrow.distanciaMm(LAT, LON, LAT + 1_079, LON);
-        vm.expectRevert(abi.encodeWithSelector(EscrowTrabalho.ForaDoRaio.selector, d));
-        escrow.checkIn(id, LAT + 1_079, LON); // ~120 m
-        escrow.checkIn(id, LAT + 700, LON + 100); // ~78 m
+        vm.expectRevert(EscrowTrabalho.CodigoIncorreto.selector);
+        escrow.confirmarChegada(id, "porta janela cadeira mesa sofa");
+        // O código de LIBERAÇÃO não serve como código de CHEGADA (domínios separados)
+        assertTrue(escrow.hashChegada(cliente, CODIGO) != h);
+        vm.expectRevert(EscrowTrabalho.ChegadaObrigatoria.selector);
+        escrow.confirmarComCodigo(id, CODIGO);
         vm.stopPrank();
-        assertTrue(escrow.trabalho(id).checkin);
+        vm.prank(alice);
+        vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
+        escrow.confirmarChegada(id, CHEGADA);
     }
-
-    // ---------------- Modalidades ----------------
 
     function test_FluxoPresencialComAprovacao() public {
         uint256 treasuryAntes = token.balanceOf(TREASURY);
         uint256 id = _novo(EscrowTrabalho.Modalidade.Presencial, trab, 100e18, 1, 0);
-        assertEq(token.balanceOf(address(escrow)), 100e18, "escrow recebe integral");
+        assertEq(token.balanceOf(address(escrow)), 100e18);
 
         vm.startPrank(trab);
         escrow.aceitar(id);
-        vm.expectRevert(EscrowTrabalho.CheckInObrigatorio.selector);
+        vm.expectRevert(EscrowTrabalho.ChegadaObrigatoria.selector);
         escrow.marcarEntregue(id);
-        escrow.checkIn(id, LAT + 450, LON);
+        escrow.confirmarChegada(id, CHEGADA);
+        assertTrue(escrow.trabalho(id).chegou);
         escrow.marcarEntregue(id);
         vm.stopPrank();
 
@@ -776,48 +793,40 @@ contract EscrowTrabalhoTest is Base {
         assertEq(token.balanceOf(TREASURY) - treasuryAntes, 0.1e18);
         assertEq(token.balanceOf(address(escrow)), 0);
         assertEq(uint8(_estado(id)), uint8(EscrowTrabalho.Estado.Concluido));
-        (uint32 c,,,) = escrow.reputacao(trab);
-        assertEq(c, 1);
         assertEq(escrow.nivel(trab), 1);
     }
 
-    function test_FluxoPresencialComCodigo() public {
-        bytes32 h = escrow.hashCodigo(cliente, "ABCD-EFGH-JKLM");
+    function test_FluxoPresencialComCodigoDeLiberacao() public {
+        bytes32 h = escrow.hashCodigo(cliente, CODIGO);
         uint256 id = _novo(EscrowTrabalho.Modalidade.Presencial, trab, 100e18, 1, h);
         vm.startPrank(trab);
         escrow.aceitar(id);
-        vm.expectRevert(EscrowTrabalho.CheckInObrigatorio.selector);
-        escrow.confirmarComCodigo(id, "ABCD-EFGH-JKLM");
-        escrow.checkIn(id, LAT, LON);
-        escrow.confirmarComCodigo(id, "ABCD-EFGH-JKLM");
+        escrow.confirmarChegada(id, CHEGADA);
+        escrow.confirmarComCodigo(id, CODIGO);
         vm.stopPrank();
         assertEq(token.balanceOf(trab), 99.9e18);
     }
 
     function test_FluxoEntregaComCodigoVagaAberta() public {
-        string memory codigo = "K7Q2-M9XA-4PZD";
-        bytes32 h = escrow.hashCodigo(cliente, codigo);
+        bytes32 h = escrow.hashCodigo(cliente, CODIGO);
         uint256 id = _novo(EscrowTrabalho.Modalidade.Entrega, address(0), 25e18, 1, h);
-        assertTrue(escrow.trabalho(id).codigoHash == h);
 
         vm.prank(cliente);
         vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
         escrow.aceitar(id);
 
         vm.startPrank(trab);
-        escrow.aceitar(id);
-        vm.expectRevert(EscrowTrabalho.CheckInObrigatorio.selector);
-        escrow.confirmarComCodigo(id, codigo);
+        escrow.aceitar(id); // entrega começa direto: sem o código ninguém recebe
         vm.expectRevert(EscrowTrabalho.ModalidadeInvalida.selector);
         escrow.marcarEntregue(id);
-        escrow.checkIn(id, LAT - 300, LON + 200);
+        vm.expectRevert(EscrowTrabalho.ModalidadeInvalida.selector);
+        escrow.confirmarChegada(id, CHEGADA);
         vm.expectRevert(EscrowTrabalho.CodigoIncorreto.selector);
-        escrow.confirmarComCodigo(id, "K7Q2-M9XA-4PZE");
+        escrow.confirmarComCodigo(id, "vogal imunizar nordeste sapato havia");
         vm.stopPrank();
 
-        // Qualquer pessoa pode submeter o código; o dinheiro vai para o trabalhador.
-        vm.prank(relayer);
-        escrow.confirmarComCodigo(id, codigo);
+        vm.prank(relayer); // qualquer pessoa submete; o dinheiro vai para o trabalhador
+        escrow.confirmarComCodigo(id, CODIGO);
         assertEq(token.balanceOf(trab), 24.975e18);
         assertEq(token.balanceOf(relayer), 0);
     }
@@ -832,7 +841,7 @@ contract EscrowTrabalhoTest is Base {
         vm.startPrank(trab);
         escrow.aceitar(id);
         vm.expectRevert(EscrowTrabalho.ModalidadeInvalida.selector);
-        escrow.checkIn(id, LAT, LON);
+        escrow.confirmarChegada(id, CHEGADA);
         escrow.marcarEntregue(id);
         uint256 libera = block.timestamp + 3 days;
         vm.expectRevert(abi.encodeWithSelector(EscrowTrabalho.RevisaoEmAndamento.selector, libera));
@@ -843,12 +852,12 @@ contract EscrowTrabalhoTest is Base {
         assertEq(token.balanceOf(trab), 299.7e18);
     }
 
-    function test_FluxoRemotoComCodigoSemGps() public {
-        bytes32 h = escrow.hashCodigo(cliente, "SENHA-REMOTA-01");
+    function test_FluxoRemotoComCodigo() public {
+        bytes32 h = escrow.hashCodigo(cliente, CODIGO);
         uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, trab, 10e18, 1, h);
         vm.prank(trab);
         escrow.aceitar(id);
-        escrow.confirmarComCodigo(id, "SENHA-REMOTA-01");
+        escrow.confirmarComCodigo(id, CODIGO);
         assertEq(token.balanceOf(trab), 9.99e18);
     }
 
@@ -856,29 +865,22 @@ contract EscrowTrabalhoTest is Base {
         uint256 id = _novo(EscrowTrabalho.Modalidade.Etapas, trab, 100e18, 3, 0);
         vm.prank(trab);
         escrow.aceitar(id);
-
-        // Etapa 1: cliente adianta sem esperar entrega
         vm.prank(cliente);
         escrow.liberar(id);
         assertEq(escrow.trabalho(id).etapasPagas, 1);
         assertEq(uint8(_estado(id)), uint8(EscrowTrabalho.Estado.Aceito));
-
-        // Etapa 2: trabalhador entrega e saca após 3 dias
         vm.startPrank(trab);
         escrow.marcarEntregue(id);
         vm.warp(block.timestamp + 3 days);
         escrow.reivindicar(id);
         vm.stopPrank();
-
-        // Etapa 3 (última leva o resto da divisão)
         vm.prank(trab);
         escrow.marcarEntregue(id);
         vm.prank(cliente);
         escrow.liberar(id);
-
         assertEq(uint8(_estado(id)), uint8(EscrowTrabalho.Estado.Concluido));
         assertEq(token.balanceOf(address(escrow)), 0);
-        assertEq(token.balanceOf(trab), 99.9e18 + 1); // taxa arredondada para baixo em cada parcela
+        assertEq(token.balanceOf(trab), 99.9e18 + 1);
     }
 
     function test_EtapasValidacoes() public {
@@ -897,27 +899,19 @@ contract EscrowTrabalhoTest is Base {
         _novo(EscrowTrabalho.Modalidade.Remoto, trab, 0, 1, 0);
         vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
         _novo(EscrowTrabalho.Modalidade.Remoto, cliente, 1e18, 1, 0);
-
         EscrowTrabalho.NovoTrabalho memory p = EscrowTrabalho.NovoTrabalho({
-            modalidade: EscrowTrabalho.Modalidade.Presencial,
+            modalidade: EscrowTrabalho.Modalidade.Remoto,
             trabalhador: trab,
             valor: 1e18,
             prazo: uint64(block.timestamp),
-            lat: LAT,
-            lon: LON,
             etapas: 1,
             codigoHash: 0,
+            chegadaHash: 0,
             descricao: ""
         });
-        vm.startPrank(cliente);
+        vm.prank(cliente);
         vm.expectRevert(EscrowTrabalho.PrazoInvalido.selector);
         escrow.criarTrabalho(p);
-        p.prazo = uint64(block.timestamp + 1 days);
-        p.lat = 91_000_000;
-        vm.expectRevert(EscrowTrabalho.CoordenadasInvalidas.selector);
-        escrow.criarTrabalho(p);
-        vm.stopPrank();
-
         vm.expectRevert(EscrowTrabalho.TrabalhoInexistente.selector);
         escrow.aceitar(999);
     }
@@ -930,7 +924,6 @@ contract EscrowTrabalhoTest is Base {
         assertTrue(t.pendenteAprovacao);
         assertEq(uint8(t.estado), uint8(EscrowTrabalho.Estado.Aberto));
 
-        // O candidato não consegue marcar entrega nem abrir disputa antes da aprovação
         vm.startPrank(trab);
         vm.expectRevert(
             abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aberto)
@@ -944,7 +937,6 @@ contract EscrowTrabalhoTest is Base {
         escrow.aceitar(id);
         vm.stopPrank();
 
-        // Outro não pode decidir; cliente recusa e a vaga reabre
         vm.prank(alice);
         vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
         escrow.decidirCandidato(id, true);
@@ -952,7 +944,6 @@ contract EscrowTrabalhoTest is Base {
         escrow.decidirCandidato(id, false);
         assertEq(escrow.trabalho(id).trabalhador, address(0));
 
-        // Novo candidato retira a candidatura; outro se candidata e é aprovado
         vm.prank(alice);
         escrow.aceitar(id);
         vm.prank(alice);
@@ -993,7 +984,7 @@ contract EscrowTrabalhoTest is Base {
         escrow.cancelar(id);
         vm.prank(cliente);
         escrow.cancelar(id);
-        assertEq(token.balanceOf(cliente), saldo, "reembolso integral sem taxa");
+        assertEq(token.balanceOf(cliente), saldo);
         vm.prank(trab);
         vm.expectRevert(
             abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Cancelado)
@@ -1028,7 +1019,7 @@ contract EscrowTrabalhoTest is Base {
         vm.prank(trab);
         escrow.aceitar(id);
         vm.prank(cliente);
-        escrow.liberar(id); // paga 30
+        escrow.liberar(id);
         uint256 prazo = escrow.trabalho(id).prazo;
         vm.prank(cliente);
         vm.expectRevert(abi.encodeWithSelector(EscrowTrabalho.PrazoNaoVencido.selector, prazo));
@@ -1050,7 +1041,6 @@ contract EscrowTrabalhoTest is Base {
         escrow.abrirDisputa(id);
         vm.prank(cliente);
         escrow.abrirDisputa(id);
-
         vm.prank(trab);
         escrow.proporAcordo(id, 8_000);
         vm.prank(cliente);
@@ -1063,11 +1053,10 @@ contract EscrowTrabalhoTest is Base {
         escrow.proporAcordo(id, 10_001);
         vm.prank(cliente);
         escrow.proporAcordo(id, 7_000);
-
         assertEq(uint8(_estado(id)), uint8(EscrowTrabalho.Estado.Concluido));
         assertEq(token.balanceOf(trab), 69.93e18);
         assertEq(token.balanceOf(cliente), saldo + 30e18);
-        (, uint32 disputas,,) = escrow.reputacao(trab);
+        (, uint32 disputas,,,,,) = escrow.reputacao(trab);
         assertEq(disputas, 1);
     }
 
@@ -1081,49 +1070,96 @@ contract EscrowTrabalhoTest is Base {
         vm.expectRevert();
         escrow.resolverPorTempo(id);
         vm.warp(block.timestamp + 30 days);
-        vm.prank(alice); // qualquer um executa
+        vm.prank(alice);
         escrow.resolverPorTempo(id);
         assertEq(token.balanceOf(trab), 49.95e18);
         assertEq(token.balanceOf(cliente), saldo + 50e18);
     }
 
-    function test_AvaliacoesENiveis() public {
+    // ---------------- Reputação anti-contas-falsas ----------------
+
+    function test_NivelExigeContrapartesVolumeEIdade() public {
         for (uint256 i = 0; i < 5; ++i) {
-            uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, trab, 10e18, 1, 0);
-            vm.prank(trab);
-            escrow.aceitar(id);
-            vm.prank(cliente);
-            vm.expectRevert(
-                abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aceito)
-            );
-            escrow.avaliar(id, 5);
-            vm.prank(cliente);
-            escrow.liberar(id);
-            if (i == 0) assertEq(escrow.nivel(trab), 1);
-            vm.prank(cliente);
+            address c = makeAddr(string(abi.encodePacked("cliente", i)));
+            deal(address(token), c, 1_000e18, true);
+            vm.prank(c);
+            token.approve(address(escrow), type(uint256).max);
+            uint256 id = _concluirRemoto(c, trab, 100e18);
+            vm.prank(c);
             escrow.avaliar(id, 4);
-            vm.prank(trab);
-            escrow.avaliar(id, 5);
+        }
+        (uint32 conc,, uint32 aval, uint32 contra, uint64 soma, uint64 desde, uint128 volume) =
+            escrow.reputacao(trab);
+        assertEq(conc, 5);
+        assertEq(aval, 5);
+        assertEq(contra, 5);
+        assertEq(soma, 20);
+        assertEq(desde, block.timestamp);
+        assertEq(volume, 500e18);
+        assertEq(escrow.nivel(trab), 1, "conta nova: idade minima de 14 dias");
+        vm.warp(block.timestamp + 14 days);
+        assertEq(escrow.nivel(trab), 2);
+        assertEq(escrow.nivel(alice), 0);
+    }
+
+    function test_ContasFalsasRepetindoOMesmoParNaoSobemDeNivel() public {
+        for (uint256 i = 0; i < 30; ++i) {
+            uint256 id = _concluirRemoto(cliente, trab, 20e18);
             vm.prank(cliente);
-            vm.expectRevert(EscrowTrabalho.JaAvaliou.selector);
-            escrow.avaliar(id, 5);
-            vm.prank(alice);
-            vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
             escrow.avaliar(id, 5);
         }
-        assertEq(escrow.nivel(trab), 2);
-        assertEq(escrow.nivel(cliente), 2);
-        assertEq(escrow.nivel(alice), 0);
-        (uint32 c,, uint32 n, uint64 soma) = escrow.reputacao(trab);
-        assertEq(c, 5);
-        assertEq(n, 5);
-        assertEq(soma, 20);
+        vm.warp(block.timestamp + 400 days);
+        (uint32 conc,, uint32 aval, uint32 contra, uint64 soma,,) = escrow.reputacao(trab);
+        assertEq(conc, 30);
+        assertEq(contra, 1, "um so parceiro");
+        assertEq(aval, 1, "um so avaliador");
+        assertEq(soma, 5);
+        assertEq(escrow.nivel(trab), 1);
+    }
 
-        uint256 id2 = _novo(EscrowTrabalho.Modalidade.Remoto, trab, 10e18, 1, 0);
-        vm.prank(trab);
-        escrow.aceitar(id2);
+    function test_NotaMaisRecenteDoParSubstituiAAnterior() public {
+        uint256 id1 = _concluirRemoto(cliente, trab, 20e18);
         vm.prank(cliente);
-        escrow.liberar(id2);
+        escrow.avaliar(id1, 5);
+        uint256 id2 = _concluirRemoto(cliente, trab, 20e18);
+        vm.prank(cliente);
+        escrow.avaliar(id2, 1);
+        (,, uint32 aval,, uint64 soma,,) = escrow.reputacao(trab);
+        assertEq(aval, 1);
+        assertEq(soma, 1);
+    }
+
+    function test_AvaliacaoExigeValorMinimoEUnicaPorTrabalho() public {
+        uint256 baixo = _concluirRemoto(cliente, trab, 5e18);
+        vm.prank(cliente);
+        vm.expectRevert(EscrowTrabalho.ValorBaixoParaAvaliar.selector);
+        escrow.avaliar(baixo, 5);
+
+        uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, trab, 10e18, 1, 0);
+        vm.prank(trab);
+        escrow.aceitar(id);
+        vm.prank(cliente);
+        vm.expectRevert(
+            abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aceito)
+        );
+        escrow.avaliar(id, 5);
+        vm.prank(cliente);
+        escrow.liberar(id);
+        vm.prank(cliente);
+        escrow.avaliar(id, 4);
+        vm.prank(trab);
+        escrow.avaliar(id, 5);
+        vm.prank(cliente);
+        vm.expectRevert(EscrowTrabalho.JaAvaliou.selector);
+        escrow.avaliar(id, 5);
+        vm.prank(alice);
+        vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
+        escrow.avaliar(id, 5);
+        vm.prank(trab);
+        vm.expectRevert(EscrowTrabalho.JaAvaliou.selector);
+        escrow.avaliar(id, 5);
+
+        uint256 id2 = _concluirRemoto(cliente, trab, 10e18);
         vm.prank(cliente);
         vm.expectRevert(EscrowTrabalho.EstrelasInvalidas.selector);
         escrow.avaliar(id2, 6);
@@ -1140,8 +1176,7 @@ contract EscrowTrabalhoTest is Base {
 contract IntegracaoTest is Base {
     function test_EcossistemaCompleto() public {
         // 1) Cliente compra xBRL com BRZ
-        uint256 xb = _emitirBrz(carol, 2_000e18);
-        assertEq(xb, 1_998e18);
+        assertEq(_emitirBrz(carol, 2_000e18), 1_998e18);
 
         // 2) Contrata entrega com código; bob entrega e recebe
         vm.startPrank(carol);
@@ -1153,28 +1188,24 @@ contract IntegracaoTest is Base {
                 trabalhador: address(0),
                 valor: 1_000e18,
                 prazo: uint64(block.timestamp + 1 days),
-                lat: LAT,
-                lon: LON,
                 etapas: 1,
                 codigoHash: h,
+                chegadaHash: 0,
                 descricao: "Entrega de 50 pasteis"
             })
         );
         vm.stopPrank();
         vm.startPrank(bob);
         escrow.aceitar(id);
-        escrow.checkIn(id, LAT + 10, LON - 10);
         escrow.confirmarComCodigo(id, "pastel feira moeda tigela viola");
         assertEq(token.balanceOf(bob), 999e18);
 
-        // 3) bob resgata o pagamento em BRZ
+        // 3) bob resgata em BRZ
         token.approve(address(reserva), 999e18);
         uint256 pago = reserva.resgatar(address(brz), 999e18, 0);
         vm.stopPrank();
         assertEq(brz.balanceOf(bob), pago);
         assertEq(pago, 998.001e18);
-
-        // Treasury recebeu: 2 (emissão) + 1 (escrow) + 0,999 (resgate)
         assertEq(token.balanceOf(TREASURY), 2e18 + 1e18 + 0.999e18);
         _lastroCobreSupply();
     }
@@ -1199,7 +1230,6 @@ contract DeployScriptTest is Test {
         assertEq(a.lastros.length, 1);
         assertEq(ReservaBRL(a.reserva).owner(), 0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1);
 
-        // Reexecução: mesmos endereços, nada quebra
         DeployPolygon.Implantacao memory b = s.run();
         assertEq(a.token, b.token);
         assertEq(a.reserva, b.reserva);
@@ -1210,7 +1240,6 @@ contract DeployScriptTest is Test {
         vm.chainId(137);
         address brz = 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc;
         address brla = 0xE6A537a407488807F0bbeb0038B79004f19DDDFb;
-        // Simula os tokens reais (18 casas) para o teste local.
         MockBRL m = new MockBRL("BRZ", "BRZ", 18);
         vm.etch(brz, address(m).code);
         vm.etch(brla, address(m).code);

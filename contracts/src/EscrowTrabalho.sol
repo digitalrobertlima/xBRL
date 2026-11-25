@@ -4,26 +4,30 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @title EscrowTrabalho — marketplace universal de trabalho pago em xBRL, sem intermediário
 /// @notice O cliente trava o pagamento no contrato; o trabalhador recebe ao cumprir as regras da modalidade.
 ///
 /// Modalidades:
-///   0 PRESENCIAL — serviço no local (faxina, reparo, aula). Exige check-in GPS a até 80 m do endereço.
-///                  Libera pelo código do cliente (se definido), pelo aceite do cliente ou, após entrega
+///   0 PRESENCIAL — serviço no local (faxina, reparo, aula). O trabalhador prova que chegou digitando ou
+///                  escaneando o CÓDIGO DE CHEGADA (palavras/QR que ficam no local, com o cliente).
+///                  Libera pelo código de liberação (se definido), pelo aceite do cliente ou, após entrega
 ///                  marcada, automaticamente em 3 dias sem contestação.
-///   1 ENTREGA    — leva algo a um destino. Exige check-in GPS a até 80 m do destino + CÓDIGO DE ENTREGA
-///                  (5 palavras) que só o destinatário tem. Código correto = pagamento imediato.
+///   1 ENTREGA    — leva algo a um destino. O CÓDIGO DE ENTREGA (palavras/QR) que só o destinatário tem
+///                  prova a chegada e libera o pagamento na hora.
 ///   2 REMOTO     — trabalho digital. Trabalhador marca entregue; cliente aprova ou, em 3 dias de silêncio,
 ///                  o trabalhador saca.
 ///   3 ETAPAS     — projeto em 2 a 50 parcelas iguais; cada etapa segue a regra do REMOTO.
 ///
-/// GPS é declaratório (vem do aparelho do trabalhador) e fica registrado on-chain como prova; a garantia
-/// forte é o código de entrega ou o aceite do cliente. Disputas: as partes propõem uma divisão; se as
-/// duas propostas coincidirem, resolve na hora. Sem acordo em 30 dias, qualquer um executa 50/50.
-/// Não existe árbitro, dono, pausa ou saque administrativo. Taxa: 0,1% sobre cada pagamento ao Treasury.
+/// Sem GPS: localização de celular pode ser falsificada; códigos secretos não.
+/// Vaga aberta (exceto ENTREGA) exige o cliente aprovar o candidato.
+/// Disputas: as partes propõem uma divisão; propostas iguais resolvem na hora. Sem acordo em 30 dias,
+/// qualquer um executa 50/50. Não existe árbitro, dono, pausa ou saque administrativo.
+/// Taxa: 0,1% sobre cada pagamento ao Treasury.
+///
+/// Reputação anti-contas-falsas: o nível considera contrapartes DISTINTAS, volume pago, idade da conta,
+/// estrelas (uma por par de contas, a última vale) e taxa de disputas. Avaliação só em trabalhos >= 10 xBRL.
 contract EscrowTrabalho is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -52,18 +56,17 @@ contract EscrowTrabalho is ReentrancyGuard {
         uint8 etapasPagas;
         address trabalhador; // slot 1
         uint64 entregueEm;
-        bool checkin;
+        bool chegou; // código de chegada confirmado (PRESENCIAL)
         bool clienteAvaliou;
         bool trabalhadorAvaliou;
         bool pendenteAprovacao; // vaga aberta: candidato aguardando o cliente aprovar
         uint128 valor; // slot 2
         uint128 pago; // bruto já liberado (inclui taxa)
-        int32 lat; // slot 3 — microdegraus
-        int32 lon;
-        uint64 disputaEm;
+        uint64 disputaEm; // slot 3
         uint16 propostaCliente; // bps para o trabalhador + 1 (0 = sem proposta)
         uint16 propostaTrabalhador;
-        bytes32 codigoHash; // slot 4 — keccak256(abi.encode(address(this), cliente, codigo)); 0 = sem código
+        bytes32 codigoHash; // slot 4 — liberação/entrega: hashCodigo(cliente, codigo); 0 = sem código
+        bytes32 chegadaHash; // slot 5 — chegada (PRESENCIAL): hashChegada(cliente, codigo)
     }
 
     struct NovoTrabalho {
@@ -71,18 +74,20 @@ contract EscrowTrabalho is ReentrancyGuard {
         address trabalhador; // address(0) = vaga aberta, qualquer um aceita
         uint128 valor;
         uint64 prazo;
-        int32 lat;
-        int32 lon;
         uint8 etapas;
         bytes32 codigoHash;
+        bytes32 chegadaHash;
         string descricao;
     }
 
     struct Reputacao {
         uint32 concluidos;
         uint32 disputas;
-        uint32 avaliacoes;
+        uint32 avaliacoes; // avaliadores distintos
+        uint32 contrapartes; // pessoas distintas com quem concluiu trabalho
         uint64 somaEstrelas;
+        uint64 desde; // primeiro trabalho concluído
+        uint128 volume; // soma dos valores concluídos (xBRL)
     }
 
     IERC20 public immutable XBRL;
@@ -90,19 +95,16 @@ contract EscrowTrabalho is ReentrancyGuard {
 
     uint256 public constant BPS = 10_000;
     uint256 public constant TAXA_BPS = 10; // 0,1%
-    uint256 public constant RAIO_MAX_MM = 80_000; // 80 metros
+    uint256 public constant VALOR_MIN_AVALIACAO = 10e18;
     uint256 public constant PRAZO_REVISAO = 3 days;
     uint256 public constant PRAZO_DISPUTA = 30 days;
     uint8 public constant MAX_ETAPAS = 50;
 
-    // Geodésia em ponto fixo (1e18): metros por microdegrau = 2πR/360/1e6, R = 6.371.008,8 m.
-    int256 private constant NM_POR_MICRODEGRAU = 111_195_080; // nanômetros
-    int256 private constant PI_E18 = 3_141_592_653_589_793_238;
-    int256 private constant E18 = 1e18;
-
     uint256 public totalTrabalhos;
     mapping(uint256 => Trabalho) private _trabalhos;
     mapping(address => Reputacao) public reputacao;
+    mapping(bytes32 => bool) private _parJaConcluiu; // par (a, b) sem ordem
+    mapping(bytes32 => uint8) private _estrelasDoPar; // avaliador -> avaliado (última nota)
 
     event TrabalhoCriado(
         uint256 indexed id,
@@ -111,16 +113,15 @@ contract EscrowTrabalho is ReentrancyGuard {
         Modalidade modalidade,
         uint256 valor,
         uint64 prazo,
-        int32 lat,
-        int32 lon,
         uint8 etapas,
         bool comCodigo,
+        bool comChegada,
         string descricao
     );
     event TrabalhoAceito(uint256 indexed id, address indexed trabalhador);
     event CandidaturaRecebida(uint256 indexed id, address indexed candidato);
     event CandidaturaEncerrada(uint256 indexed id, address indexed candidato, bool porCliente);
-    event CheckIn(uint256 indexed id, address indexed trabalhador, int32 lat, int32 lon, uint256 distanciaMm);
+    event ChegadaConfirmada(uint256 indexed id, address indexed trabalhador);
     event EntregaMarcada(uint256 indexed id, uint8 etapa);
     event Pagamento(uint256 indexed id, address indexed para, uint256 liquido, uint256 taxa);
     event Reembolso(uint256 indexed id, address indexed cliente, uint256 valor);
@@ -134,19 +135,18 @@ contract EscrowTrabalho is ReentrancyGuard {
     error ValorZero();
     error PrazoInvalido();
     error EtapasInvalidas();
-    error CoordenadasInvalidas();
     error CodigoObrigatorio();
     error NaoAutorizado();
     error EstadoInvalido(Estado atual);
     error ModalidadeInvalida();
-    error ForaDoRaio(uint256 distanciaMm);
-    error CheckInObrigatorio();
+    error ChegadaObrigatoria();
     error CodigoIncorreto();
     error RevisaoEmAndamento(uint256 liberaEm);
     error PrazoNaoVencido(uint256 venceEm);
     error EstrelasInvalidas();
     error BpsInvalido();
     error JaAvaliou();
+    error ValorBaixoParaAvaliar();
     error TrabalhoInexistente();
 
     constructor(address xbrl, address treasury) {
@@ -170,13 +170,11 @@ contract EscrowTrabalho is ReentrancyGuard {
         } else if (p.etapas > 1) {
             revert EtapasInvalidas();
         }
-        bool presencial = p.modalidade == Modalidade.Presencial || p.modalidade == Modalidade.Entrega;
-        if (presencial) {
-            if (p.lat < -90_000_000 || p.lat > 90_000_000 || p.lon < -180_000_000 || p.lon > 180_000_000) {
-                revert CoordenadasInvalidas();
-            }
-        }
         if (p.modalidade == Modalidade.Entrega && p.codigoHash == bytes32(0)) revert CodigoObrigatorio();
+        if (p.modalidade == Modalidade.Presencial && p.chegadaHash == bytes32(0)) revert CodigoObrigatorio();
+        if (p.modalidade != Modalidade.Presencial && p.chegadaHash != bytes32(0)) {
+            revert ModalidadeInvalida();
+        }
         if (p.modalidade == Modalidade.Etapas && p.codigoHash != bytes32(0)) revert ModalidadeInvalida();
 
         id = ++totalTrabalhos;
@@ -189,10 +187,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         t.prazo = p.prazo;
         t.etapas = etapas;
         t.codigoHash = p.codigoHash;
-        if (presencial) {
-            t.lat = p.lat;
-            t.lon = p.lon;
-        }
+        t.chegadaHash = p.chegadaHash;
 
         XBRL.safeTransferFrom(msg.sender, address(this), p.valor);
         emit TrabalhoCriado(
@@ -202,10 +197,9 @@ contract EscrowTrabalho is ReentrancyGuard {
             p.modalidade,
             p.valor,
             p.prazo,
-            t.lat,
-            t.lon,
             etapas,
             p.codigoHash != bytes32(0),
+            p.chegadaHash != bytes32(0),
             p.descricao
         );
     }
@@ -291,28 +285,25 @@ contract EscrowTrabalho is ReentrancyGuard {
     // Execução
     // ------------------------------------------------------------------
 
-    /// @notice Check-in GPS do trabalhador no local (≤ 80 m). Coordenadas em microdegraus (graus × 1e6).
-    function checkIn(uint256 id, int32 lat, int32 lon) external {
+    /// @notice PRESENCIAL: o trabalhador prova que chegou com o código de chegada que fica no local
+    /// (palavras ou QR mostrados pelo cliente). Sem isso não dá para marcar entrega nem liberar por código.
+    function confirmarChegada(uint256 id, string calldata codigo) external {
         Trabalho storage t = _existente(id);
         if (msg.sender != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
-        if (t.modalidade != Modalidade.Presencial && t.modalidade != Modalidade.Entrega) {
-            revert ModalidadeInvalida();
-        }
-        uint256 d = distanciaMm(t.lat, t.lon, lat, lon);
-        if (d > RAIO_MAX_MM) revert ForaDoRaio(d);
-        t.checkin = true;
-        emit CheckIn(id, msg.sender, lat, lon, d);
+        if (t.modalidade != Modalidade.Presencial) revert ModalidadeInvalida();
+        if (hashChegada(t.cliente, codigo) != t.chegadaHash) revert CodigoIncorreto();
+        t.chegou = true;
+        emit ChegadaConfirmada(id, msg.sender);
     }
 
-    /// @notice Confirma com o código secreto do cliente/destinatário (PRESENCIAL/ENTREGA exigem check-in antes).
+    /// @notice Confirma com o código de liberação/entrega do cliente (PRESENCIAL exige a chegada antes).
     /// Qualquer um pode submeter; o pagamento vai sempre para o trabalhador.
     function confirmarComCodigo(uint256 id, string calldata codigo) external nonReentrant {
         Trabalho storage t = _existente(id);
         if (t.codigoHash == bytes32(0)) revert ModalidadeInvalida();
         if (t.estado != Estado.Aceito && t.estado != Estado.Entregue) revert EstadoInvalido(t.estado);
-        bool presencial = t.modalidade == Modalidade.Presencial || t.modalidade == Modalidade.Entrega;
-        if (presencial && !t.checkin) revert CheckInObrigatorio();
+        if (t.modalidade == Modalidade.Presencial && !t.chegou) revert ChegadaObrigatoria();
         if (hashCodigo(t.cliente, codigo) != t.codigoHash) revert CodigoIncorreto();
         _pagarTudo(id, t);
     }
@@ -323,7 +314,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (msg.sender != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         if (t.modalidade == Modalidade.Entrega) revert ModalidadeInvalida(); // entrega exige código
-        if (t.modalidade == Modalidade.Presencial && !t.checkin) revert CheckInObrigatorio();
+        if (t.modalidade == Modalidade.Presencial && !t.chegou) revert ChegadaObrigatoria();
         t.estado = Estado.Entregue;
         t.entregueEm = SafeCast.toUint64(block.timestamp);
         emit EntregaMarcada(id, t.etapasPagas + 1);
@@ -395,11 +386,14 @@ contract EscrowTrabalho is ReentrancyGuard {
     // Reputação
     // ------------------------------------------------------------------
 
-    /// @notice Avaliação mútua (1 a 5 estrelas), uma vez por parte, após a conclusão.
+    /// @notice Avaliação mútua (1 a 5 estrelas), uma vez por parte, após a conclusão de trabalhos >= 10 xBRL.
+    /// Cada pessoa conta UMA vez na média de quem ela avalia (a nota mais recente substitui a anterior):
+    /// repetir trabalhos falsos entre as mesmas contas não infla a reputação.
     function avaliar(uint256 id, uint8 estrelas) external {
         Trabalho storage t = _existente(id);
         if (t.estado != Estado.Concluido) revert EstadoInvalido(t.estado);
         if (estrelas < 1 || estrelas > 5) revert EstrelasInvalidas();
+        if (t.valor < VALOR_MIN_AVALIACAO) revert ValorBaixoParaAvaliar();
         address avaliado;
         if (msg.sender == t.cliente) {
             if (t.clienteAvaliou) revert JaAvaliou();
@@ -413,22 +407,45 @@ contract EscrowTrabalho is ReentrancyGuard {
             revert NaoAutorizado();
         }
         Reputacao storage r = reputacao[avaliado];
-        ++r.avaliacoes;
+        bytes32 chave = keccak256(abi.encode(msg.sender, avaliado));
+        uint8 anterior = _estrelasDoPar[chave];
+        if (anterior == 0) ++r.avaliacoes;
+        else r.somaEstrelas -= anterior;
         r.somaEstrelas += estrelas;
+        _estrelasDoPar[chave] = estrelas;
         emit Avaliacao(id, msg.sender, avaliado, estrelas);
     }
 
     /// @notice Nível de reputação 0 a 5 (mesma regra usada pela carteira em escrow-client.js).
+    /// Barreiras contra contas falsas: contrapartes distintas, avaliadores distintos, volume e idade da conta.
+    /// Idade não se compra: subir de nível exige tempo real de histórico.
     function nivel(address conta) external view returns (uint8) {
         Reputacao memory r = reputacao[conta];
         if (r.concluidos == 0) return 0;
         uint256 media100 = r.avaliacoes == 0 ? 0 : (uint256(r.somaEstrelas) * 100) / r.avaliacoes;
         uint256 disputaBps = (uint256(r.disputas) * BPS) / (uint256(r.concluidos) + r.disputas);
-        if (r.concluidos >= 100 && r.avaliacoes >= 50 && media100 >= 480 && disputaBps <= 200) return 5;
-        if (r.concluidos >= 50 && r.avaliacoes >= 25 && media100 >= 450 && disputaBps <= 500) return 4;
-        if (r.concluidos >= 20 && r.avaliacoes >= 10 && media100 >= 400 && disputaBps <= 1_000) return 3;
-        if (r.concluidos >= 5 && r.avaliacoes >= 3 && media100 >= 350 && disputaBps <= 2_000) return 2;
+        uint256 idade = block.timestamp - r.desde;
+        if (_atinge(r, media100, disputaBps, idade, 80, 50, 480, 200, 100_000e18, 365 days)) return 5;
+        if (_atinge(r, media100, disputaBps, idade, 40, 25, 450, 500, 25_000e18, 180 days)) return 4;
+        if (_atinge(r, media100, disputaBps, idade, 15, 10, 400, 1_000, 5_000e18, 60 days)) return 3;
+        if (_atinge(r, media100, disputaBps, idade, 5, 3, 350, 2_000, 500e18, 14 days)) return 2;
         return 1;
+    }
+
+    function _atinge(
+        Reputacao memory r,
+        uint256 media100,
+        uint256 disputaBps,
+        uint256 idade,
+        uint256 contrapartes,
+        uint256 avaliacoes,
+        uint256 mediaMin,
+        uint256 disputaMax,
+        uint256 volumeMin,
+        uint256 idadeMin
+    ) private pure returns (bool) {
+        return r.contrapartes >= contrapartes && r.avaliacoes >= avaliacoes && media100 >= mediaMin
+            && disputaBps <= disputaMax && r.volume >= volumeMin && idade >= idadeMin;
     }
 
     // ------------------------------------------------------------------
@@ -444,35 +461,9 @@ contract EscrowTrabalho is ReentrancyGuard {
         return keccak256(abi.encode(address(this), cliente, codigo));
     }
 
-    /// @notice Distância aproximada (equirretangular) em milímetros entre dois pontos em microdegraus.
-    /// Erro < 0,1% para distâncias de até alguns quilômetros — mais que suficiente para o raio de 80 m.
-    function distanciaMm(int32 lat1, int32 lon1, int32 lat2, int32 lon2) public pure returns (uint256) {
-        int256 dLat = int256(lat2) - int256(lat1);
-        int256 dLon = int256(lon2) - int256(lon1);
-        if (dLon > 180_000_000) dLon -= 360_000_000;
-        if (dLon < -180_000_000) dLon += 360_000_000;
-        int256 latMediaRad = ((int256(lat1) + int256(lat2)) * PI_E18) / (2 * 180_000_000);
-        int256 c = _cos(latMediaRad);
-        int256 dyNm = dLat * NM_POR_MICRODEGRAU;
-        int256 dxNm = (dLon * NM_POR_MICRODEGRAU * c) / E18;
-        // dxNm já está em nanômetros: arredondar antes de elevar ao quadrado muda < 1 nm.
-        // forge-lint: disable-next-line(divide-before-multiply)
-        uint256 d2 = SafeCast.toUint256(dyNm * dyNm) + SafeCast.toUint256(dxNm * dxNm);
-        return Math.sqrt(d2) / 1e6; // nm → mm
-    }
-
-    /// @dev cos(x) por série de Taylor (até x^12) em ponto fixo 1e18, |x| <= π/2.
-    function _cos(int256 x) private pure returns (int256 soma) {
-        int256 x2 = (x * x) / E18;
-        int256 termo = E18;
-        soma = E18;
-        for (int256 n = 1; n <= 6; ++n) {
-            // Série de Taylor em ponto fixo: cada termo é dividido pelo fatorial de propósito.
-            // forge-lint: disable-next-line(divide-before-multiply)
-            termo = -(termo * x2) / E18 / ((2 * n - 1) * (2 * n));
-            soma += termo;
-        }
-        if (soma < 0) soma = 0;
+    /// @notice Hash do código de chegada (domínio separado do código de liberação).
+    function hashChegada(address cliente, string calldata codigo) public view returns (bytes32) {
+        return keccak256(abi.encode(address(this), cliente, "chegada", codigo));
     }
 
     // ------------------------------------------------------------------
@@ -507,10 +498,25 @@ contract EscrowTrabalho is ReentrancyGuard {
         t.pago = t.valor;
         t.etapasPagas = t.etapas;
         t.estado = Estado.Concluido;
-        ++reputacao[t.cliente].concluidos;
-        ++reputacao[t.trabalhador].concluidos;
+        _registrarConclusao(t.cliente, t.trabalhador, t.valor);
         _pagar(id, t.trabalhador, restante);
         emit TrabalhoConcluido(id, t.cliente, t.trabalhador);
+    }
+
+    function _registrarConclusao(address a, address b, uint128 valor) private {
+        (address x, address y) = a < b ? (a, b) : (b, a);
+        bytes32 par = keccak256(abi.encode(x, y));
+        bool novoPar = !_parJaConcluiu[par];
+        if (novoPar) _parJaConcluiu[par] = true;
+        _somar(reputacao[a], valor, novoPar);
+        _somar(reputacao[b], valor, novoPar);
+    }
+
+    function _somar(Reputacao storage r, uint128 valor, bool novoPar) private {
+        ++r.concluidos;
+        r.volume += valor;
+        if (novoPar) ++r.contrapartes;
+        if (r.desde == 0) r.desde = SafeCast.toUint64(block.timestamp);
     }
 
     function _resolver(uint256 id, Trabalho storage t, uint256 bpsTrabalhador, bool porAcordo) private {

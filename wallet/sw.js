@@ -17,6 +17,7 @@ const ARQUIVOS = [
   "./src/escrow-client.js",
   "./src/palavras-pt.js",
   "./src/vendor/ethers.umd.min.js",
+  "./src/vendor/qrcode.mjs",
 ];
 
 self.addEventListener("install", (ev) => {

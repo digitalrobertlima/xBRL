@@ -9,7 +9,7 @@ export { ABIS };
 
 export const VERSAO = "1.0.0";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
-export const TAXA_BPS = 10n; // 0,1% vitalício
+export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 
 export const REDE_PADRAO = 137;
 
@@ -80,15 +80,14 @@ export const TANQUE = {
   precoMaximoPorPol: { BRL: "5", USD: "1" },
 };
 
-/** Regras de campo do marketplace (iguais às do contrato). */
+/** Regras do marketplace (iguais às do contrato). */
 export const ESCROW = {
-  raioMaxMetros: 80,
-  precisaoMaxGpsMetros: 50,
   prazoRevisaoDias: 3,
   prazoDisputaDias: 30,
+  valorMinimoAvaliacao: 10,
   modalidades: [
-    { id: 0, nome: "Presencial", icone: "🧹", resumo: "Serviço no local. Check-in GPS a até 80 m." },
-    { id: 1, nome: "Entrega", icone: "🛵", resumo: "Leva até o destino. GPS + código do destinatário." },
+    { id: 0, nome: "Presencial", icone: "🧹", resumo: "Serviço no local. O trabalhador prova que chegou com o código/QR que fica com você." },
+    { id: 1, nome: "Entrega", icone: "🛵", resumo: "Leva até o destino. O código/QR de quem recebe libera o pagamento na hora." },
     { id: 2, nome: "Remoto", icone: "💻", resumo: "Trabalho digital. Aprovação ou 3 dias de silêncio." },
     { id: 3, nome: "Por etapas", icone: "🧱", resumo: "Projeto em parcelas iguais (2 a 50)." },
   ],

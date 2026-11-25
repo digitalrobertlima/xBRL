@@ -3,12 +3,13 @@
 // - Só transições declaradas em TRANSICOES são possíveis (botão "voltar" do aparelho não fura o bloqueio).
 // - A frase/chave só existe na memória enquanto a carteira está desbloqueada (auto-bloqueio em 5 min).
 // - Ações que movem dinheiro exigem "segurar para confirmar"; desbloqueio exige "deslizar" + PIN.
-// - Check-in de trabalho exige GPS com precisão ≤ 50 m e distância ≤ 80 m.
+// - Chegada ao local é comprovada por código/QR (palavras), nunca por GPS (falsificável).
 // =====================================================================
 import { ABIS, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
 import * as K from "./keystore.js";
 import * as G from "./gas-tank.js";
-import { EscrowClient, NOMES_NIVEL, codigoGuardado, codigoTemFormatoValido, distanciaMetros, gerarCodigoEntrega, guardarCodigo, hashCodigo, lerGps, normalizarCodigo, paraMicro } from "./escrow-client.js";
+import { EscrowClient, NOMES_NIVEL, REGRAS_NIVEL, codigoGuardado, codigoTemFormatoValido, gerarCodigoEntrega, guardarCodigo, hashChegada, hashCodigo, normalizarCodigo } from "./escrow-client.js";
+import qrcode from "./vendor/qrcode.mjs";
 
 const E = globalThis.ethers;
 const $ = (s, r = document) => r.querySelector(s);
@@ -114,10 +115,11 @@ const MENSAGENS = {
   ValorZero: "Informe um valor maior que zero.",
   LastroInsuficiente: "A reserva não tem saldo suficiente desse lastro. Escolha outro.",
   LimiteJanelaResgate: "Limite de resgate das últimas 24 h atingido (proteção da Fase 2). Tente mais tarde.",
+  LimiteEmissaoDiaria: "Limite diário de emissão com este lastro atingido (proteção contra drenagem). Use o outro lastro ou tente amanhã.",
+  ChegadaObrigatoria: "O trabalhador ainda não confirmou a chegada com o código.",
+  ValorBaixoParaAvaliar: "Só trabalhos a partir de 10 xBRL podem ser avaliados.",
   EmissaoPausada: "Emissão com este lastro está pausada. Resgates seguem livres.",
   SaidaMinimaNaoAtingida: "A cotação mudou. Atualize e tente de novo.",
-  ForaDoRaio: "Você está a mais de 80 m do local.",
-  CheckInObrigatorio: "Faça o check-in no local primeiro.",
   CodigoIncorreto: "Código incorreto.",
   RevisaoEmAndamento: "O cliente ainda tem prazo para revisar a entrega.",
   PrazoNaoVencido: "O prazo ainda não venceu.",
@@ -461,6 +463,11 @@ TELAS.CONFIRMAR_PIN = () =>
     fecharModal();
     ir("INICIO");
     toast("Carteira pronta! 🎉");
+    if (await K.biometriaDisponivel()) {
+      S.pinRecente = pin;
+      modal(`<h2>👆 Proteja com biometria</h2><p>Um PIN de 6 dígitos pode ser adivinhado por quem copiar a memória do celular. A biometria guarda a chave no chip de segurança do aparelho.</p>
+        <button class="btn prim" data-acao="bio-agora">Ativar biometria agora</button><button class="btn sec" data-acao="bio-depois">Depois</button>`);
+    }
   });
 
 TELAS.BLOQUEADA = async () => {
@@ -552,10 +559,8 @@ TELAS.ENVIAR = () => {
       const sel = $("#env-token").value;
       const t = sel === "nativo" ? null : S.tokensInfo[Number(sel)];
       const v = lerValor($("#env-valor").value, t ? t.decimais : 18);
-      if (t?.principal) {
-        const para = E.isAddress($("#env-para").value) ? $("#env-para").value : E.ZeroAddress;
-        const [liq, taxa] = await c("xBRL").previewTransferencia(S.endereco, para, v);
-        out.innerHTML = `Chega ao destino: <b>${fmt(liq)}</b> xBRL · taxa do protocolo (0,1%): ${fmt(taxa, 18, 4)}`;
+      if (t) {
+        out.innerHTML = `Chega ao destino: <b>${fmt(v, t.decimais)} ${esc(t.simbolo)}</b> · sem taxa do protocolo (só o gás da rede)`;
       } else out.textContent = "";
     } catch {
       out.textContent = "";
@@ -576,7 +581,7 @@ TELAS.RESERVA = async () => {
   tela(`
     <h1>Reserva BRL</h1>
     <div class="cartao">
-      <div class="linha"><span>Fase</span><b>${Number(fase) === 1 ? "1 · paridade estrita" : "2 · estabilização algorítmica"}</b></div>
+      <div class="linha"><span>Fase</span><b>${Number(fase) === 1 ? "1 · resgate livre" : "2 · resgate até 20%/dia"}</b></div>
       <div class="linha"><span>xBRL em circulação</span><b>${fmt(supply)}</b></div>
       <div class="linha"><span>Lastro total</span><b>${reais(total)}</b></div>
       <div class="linha"><span>Colateralização</span><b>${colatTxt}</b></div>
@@ -593,7 +598,7 @@ TELAS.RESERVA = async () => {
     <div id="res-cot" class="mudo"></div>
     ${S.chainId !== 137 && lastros[0] ? `<button class="btn sec" data-acao="torneira">🚰 Pegar 10.000 ${esc(lastros[0].simbolo)} de teste</button>` : ""}
     ${botaoSegurar(modo === "emitir" ? "comprar xBRL" : "resgatar", "reserva")}
-    <p class="mudo">Taxa fixa de 0,1%. Na Fase 2 pode haver spread de até 0,40%, que fica na reserva como lastro extra. Resgates nunca podem ser pausados.</p>`);
+    <p class="mudo">Taxa fixa de 0,1%. Quem traz o lastro que já sobra (ou leva o que está faltando) paga até 0,40% a mais, e esse valor fica na reserva como lastro extra. Cada lastro tem um teto de emissão por dia, contra drenagem. Resgates nunca podem ser pausados.</p>`);
   S.params.lastros = lastros;
   const cotar = async () => {
     const out = $("#res-cot");
@@ -601,8 +606,8 @@ TELAS.RESERVA = async () => {
       const t = lastros[Number($("#res-lastro").value)];
       if (modo === "emitir") {
         const v = lerValor($("#res-valor").value, t.decimais);
-        const [liq, taxa, spread] = await r.cotarEmissao(t.endereco, v);
-        out.innerHTML = `Você recebe <b>${fmt(liq)} xBRL</b> · taxa ${fmt(taxa, 18, 4)}${spread ? ` · spread ${fmt(spread, 18, 4)}` : ""}`;
+        const [[liq, taxa, spread], hoje] = await Promise.all([r.cotarEmissao(t.endereco, v), r.emissaoDisponivelNaJanela(t.endereco)]);
+        out.innerHTML = `Você recebe <b>${fmt(liq)} xBRL</b> · taxa ${fmt(taxa, 18, 4)}${spread ? ` · lastro extra ${fmt(spread, 18, 4)}` : ""}<br>Limite de hoje com ${esc(t.simbolo)}: ${fmt(hoje)}`;
       } else {
         const v = lerValor($("#res-valor").value, 18);
         const [pago, taxa, spread] = await r.cotarResgate(t.endereco, v);
@@ -645,6 +650,55 @@ TELAS.TANQUE = async () => {
 };
 
 // ---------- Trabalhos ----------
+/** Mostra os números que sustentam o nível (contas falsas não conseguem forjar tempo nem pessoas distintas). */
+function resumoReputacao(rep) {
+  const prox = REGRAS_NIVEL[rep.nivel + 1];
+  return `<p class="mudo">${Number(rep.concluidos)} trabalhos · ${Number(rep.contrapartes)} ${Number(rep.contrapartes) === 1 ? "pessoa diferente" : "pessoas diferentes"} · ${fmt(rep.volume, 18, 0)} xBRL movimentados ·
+    média ${rep.media.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} ★ (${Number(rep.avaliacoes)} avaliadores) · ${Number(rep.disputas)} disputas · conta com ${rep.idadeDias} dias</p>
+    ${prox ? `<p class="mudo">Próximo nível: ${prox.contrapartes} pessoas diferentes, ${prox.avaliacoes} avaliadores, R$ ${prox.volume.toLocaleString("pt-BR")} movimentados e ${prox.idade} dias de conta.</p>` : ""}`;
+}
+
+/** QR Code em SVG (gerado no aparelho, sem servidor). */
+function qrSvg(texto) {
+  const q = qrcode(0, "M");
+  q.addData(texto);
+  q.make();
+  return `<div style="background:#fff;padding:10px;border-radius:12px;max-width:260px;margin:10px auto">${q.createSvgTag({ cellSize: 6, margin: 1, scalable: true })}</div>`;
+}
+
+/** Abre a câmera e lê um QR (Android/Chrome). Sem suporte: pede para digitar as palavras. */
+async function escanearQR(alvo) {
+  if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
+    toast("Este aparelho não lê QR aqui. Digite as palavras.");
+    return;
+  }
+  const detector = new BarcodeDetector({ formats: ["qr_code"] });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  modal(`<h2>Aponte para o QR</h2><video id="cam" playsinline muted style="width:100%;border-radius:12px"></video><button class="btn sec" data-acao="fechar-scanner">Cancelar</button>`);
+  const v = $("#cam");
+  v.srcObject = stream;
+  await v.play();
+  S.scanner = { stream, ativo: true };
+  const parar = () => {
+    S.scanner.ativo = false;
+    stream.getTracks().forEach((t) => t.stop());
+  };
+  while (S.scanner.ativo) {
+    try {
+      const r = await detector.detect(v);
+      if (r[0]?.rawValue) {
+        $(alvo).value = normalizarCodigo(r[0].rawValue);
+        parar();
+        fecharModal();
+        toast("Código lido ✅");
+        return;
+      }
+    } catch { /* quadro ilegível: tenta o próximo */ }
+    await new Promise((ok) => setTimeout(ok, 250));
+  }
+  parar();
+}
+
 const estrelasNivel = (n) => `<span class="nivel" title="Nível ${n}">${"★".repeat(n)}${"☆".repeat(5 - n)}</span>`;
 
 TELAS.TRABALHOS = async () => {
@@ -665,7 +719,7 @@ TELAS.TRABALHOS = async () => {
   tela(`
     <h1>Trabalhos</h1>
     <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
-      <p class="mudo">${Number(rep.concluidos)} concluídos · média ${rep.media.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} ★ · ${Number(rep.disputas)} disputas</p></div>
+      ${resumoReputacao(rep)}</div>
     <button class="btn prim" data-ir="TRABALHO_NOVO">+ Contratar alguém</button>
     <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas abertas (${vagas.length})</button></div>
     ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
@@ -673,7 +727,6 @@ TELAS.TRABALHOS = async () => {
 
 TELAS.TRABALHO_NOVO = () => {
   const m = Number(S.params.modalidade ?? 0);
-  const presencial = m === 0 || m === 1;
   tela(`
     <h1>Contratar</h1>
     <div class="grade duas">${ESCROW.modalidades.map((x) => `<button class="atalho" data-acao="mod-${x.id}" aria-pressed="${x.id === m}" style="${x.id === m ? "border-color:var(--o400);background:rgba(212,175,55,.14)" : ""}"><span>${x.icone}</span>${esc(x.nome)}</button>`).join("")}</div>
@@ -683,11 +736,8 @@ TELAS.TRABALHO_NOVO = () => {
     <label for="tn-prazo">Prazo (dias)</label><input id="tn-prazo" inputmode="numeric" value="7">
     ${m === 3 ? `<label for="tn-etapas">Número de etapas (2 a 50)</label><input id="tn-etapas" inputmode="numeric" value="3">` : ""}
     <label for="tn-trab">Trabalhador (opcional: vazio = vaga aberta)</label><input id="tn-trab" autocomplete="off" autocapitalize="none" placeholder="0x…">
-    ${presencial ? `
-      <label>Local ${m === 1 ? "de entrega" : "do serviço"}</label>
-      <button class="btn sec" data-acao="tn-gps">📍 Usar minha localização atual</button>
-      <div class="grade duas"><input id="tn-lat" inputmode="decimal" placeholder="Latitude (-19.932)" aria-label="Latitude"><input id="tn-lon" inputmode="decimal" placeholder="Longitude (-43.938)" aria-label="Longitude"></div>` : ""}
-    ${m === 1 ? `<div class="ok">Um código de 5 palavras será gerado. Passe-o só para quem vai receber.</div>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
+    ${m === 0 ? `<div class="ok">Vamos gerar um <b>código de chegada</b> (palavras + QR). Deixe no local ou mostre na porta: o trabalhador só comprova que chegou com ele.</div>` : ""}
+    ${m === 1 ? `<div class="ok">Vamos gerar um <b>código de entrega</b> (palavras + QR). Passe só para quem vai receber: ao conferir, o pagamento sai na hora.</div>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar o pagamento</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
     ${botaoSegurar("travar o pagamento", "criar-trabalho")}
     <p class="mudo">O valor fica travado no contrato, não com a gente. Taxa de 0,1% só quando o trabalhador recebe.</p>`);
 };
@@ -701,9 +751,10 @@ TELAS.TRABALHO = async () => {
   const [rc, rt] = await Promise.all([S.escrow.reputacao(t.cliente), t.trabalhador !== E.ZeroAddress ? S.escrow.reputacao(t.trabalhador) : null]);
   const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
   const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
+  const chegada = souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
   S.params.t = t;
   const ROTULOS = {
-    aceitar: "aceitar o trabalho", cancelar: "cancelar e reaver o valor", checkIn: "fazer check-in (GPS)", marcarEntregue: "marcar como entregue",
+    aceitar: "aceitar o trabalho", cancelar: "cancelar e reaver o valor", marcarEntregue: "marcar como entregue",
     liberar: t.modalidade === 3 && t.etapasPagas + 1 < t.etapas ? `liberar a etapa ${t.etapasPagas + 1}` : "aprovar e pagar", reivindicar: "receber (prazo de revisão vencido)",
     desistir: "desistir (devolve ao cliente)", aprovarCandidato: "aprovar este trabalhador", recusarCandidato: "recusar o candidato",
     retirarCandidatura: "retirar minha candidatura", abrirDisputa: "abrir disputa", reembolsarPorPrazo: "reaver (prazo vencido)", resolverPorTempo: "executar divisão 50/50",
@@ -716,15 +767,17 @@ TELAS.TRABALHO = async () => {
       <div class="linha"><span>Já pago</span><b>${fmt(t.pago)} xBRL</b></div>
       ${t.etapas > 1 ? `<div class="linha"><span>Etapas pagas</span><b>${t.etapasPagas} de ${t.etapas}</b></div>` : ""}
       <div class="linha"><span>Prazo</span><b>${new Date(t.prazo * 1000).toLocaleString("pt-BR")}</b></div>
-      <div class="linha"><span>Cliente</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)}</span></div>
-      <div class="linha"><span>${t.pendenteAprovacao ? "Candidato" : "Trabalhador"}</span><span>${t.trabalhador === E.ZeroAddress ? "vaga aberta" : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)} ${rt ? `<small class="mudo">${Number(rt.concluidos)} feitos</small>` : ""}`}</span></div>
+      <div class="linha"><span>Cliente</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)} <small class="mudo">${Number(rc.contrapartes)} ${Number(rc.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rc.idadeDias} dias</small></span></div>
+      <div class="linha"><span>${t.pendenteAprovacao ? "Candidato" : "Trabalhador"}</span><span>${t.trabalhador === E.ZeroAddress ? "vaga aberta" : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)} ${rt ? `<small class="mudo">${Number(rt.contrapartes)} ${Number(rt.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rt.idadeDias} dias</small>` : ""}`}</span></div>
       ${t.pendenteAprovacao ? `<div class="linha"><span>Situação</span><b>aguardando o cliente aprovar</b></div>` : ""}
-      ${t.modalidade <= 1 ? `<div class="linha"><span>Local</span><span>${(t.lat / 1e6).toFixed(6)}, ${(t.lon / 1e6).toFixed(6)} ${t.checkin ? '<span class="selo verde">check-in ok</span>' : ""}</span></div>` : ""}
+      ${t.modalidade === 0 ? `<div class="linha"><span>Chegada</span>${t.chegou ? '<span class="selo verde">confirmada com código</span>' : "<b>aguardando</b>"}</div>` : ""}
       ${t.estado === 2 ? `<div class="linha"><span>Pagamento automático em</span><b>${new Date((t.entregueEm + ESCROW.prazoRevisaoDias * 86400) * 1000).toLocaleString("pt-BR")}</b></div>` : ""}
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
     </div>
-    ${codigo ? `<p class="mudo">Código de liberação (entregue só a quem recebe):</p><div class="codigo">${esc(codigo)}</div>` : ""}
-    ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de liberação</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="5 palavras, ex.: abacate bolsa canela dente elogio">${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
+    ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
+    ${codigo ? `<h2>🔑 Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</h2><p class="mudo">Entregue só a quem recebe, na hora da entrega.</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
+    ${acoes.includes("confirmarChegada") ? `<label for="tr-chegada">Cheguei: código de chegada que está no local</label><input id="tr-chegada" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-chegada">📷 Escanear QR</button>${botaoSegurar("confirmar que cheguei", "tr-chegada")}` : ""}
+    ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-codigo">📷 Escanear QR</button>${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
     ${acoes.includes("proporAcordo") ? `<label for="tr-acordo">Proposta: quanto do restante vai ao trabalhador? <b id="tr-acordo-v">50%</b></label><input type="range" id="tr-acordo" min="0" max="100" value="50">${botaoSegurar("propor acordo", "tr-acordo")}` : ""}
     ${acoes.includes("avaliar") ? `<h2>Avalie a outra parte</h2><div class="estrelas" role="group" aria-label="Estrelas">${[1, 2, 3, 4, 5].map((n) => `<button data-estrela="${n}" aria-label="${n} estrelas">★</button>`).join("")}</div>${botaoSegurar("enviar avaliação", "tr-avaliar")}` : ""}
     ${acoes.filter((a) => ROTULOS[a]).map((a) => (["abrirDisputa", "desistir", "cancelar", "recusarCandidato"].includes(a) ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
@@ -821,6 +874,7 @@ $("#btn-bloquear").addEventListener("click", bloquear);
 async function acao(nome, el) {
   switch (nome) {
     case "fechar-modal":
+      S.pinRecente = null;
       fecharModal();
       if (ABERTAS.includes(S.tela)) render().catch(mostrarErro);
       return;
@@ -887,14 +941,23 @@ async function acao(nome, el) {
     case "aba-meus":
     case "aba-vagas":
       return ir("TRABALHOS", { aba: nome.slice(4) });
-    case "tn-gps": {
-      toast("Lendo GPS…");
-      const g = await lerGps();
-      if (g.precisao > ESCROW.precisaoMaxGpsMetros) toast(`Precisão baixa (${Math.round(g.precisao)} m). Vá para céu aberto e tente de novo.`);
-      $("#tn-lat").value = g.lat.toFixed(6);
-      $("#tn-lon").value = g.lon.toFixed(6);
-      return;
+    case "scan-chegada":
+      return escanearQR("#tr-chegada");
+    case "scan-codigo":
+      return escanearQR("#tr-cod");
+    case "fechar-scanner":
+      if (S.scanner) S.scanner.ativo = false;
+      return fecharModal();
+    case "bio-agora": {
+      const pin = S.pinRecente;
+      S.pinRecente = null;
+      await K.ativarBiometria(pin);
+      fecharModal();
+      return toast("Biometria ativada ✅");
     }
+    case "bio-depois":
+      S.pinRecente = null;
+      return fecharModal();
     case "tq-cotar": {
       const t = S.params.candidatos[Number($("#tq-token").value)];
       if (S.params.faltam === 0n) return toast("O tanque já está cheio");
@@ -972,7 +1035,7 @@ async function confirmar(nome) {
       if ((S.params.modo || "emitir") === "emitir") {
         const v = lerValor($("#res-valor").value, t.decimais);
         const [liq] = await c("ReservaBRL").cotarEmissao(t.endereco, v);
-        const minimo = (liq * 995n) / 1000n; // tolerância 0,5% (spread da Fase 2 pode mudar)
+        const minimo = (liq * 995n) / 1000n; // tolerância 0,5% (o spread pode mudar se outra pessoa emitir antes)
         await executar("Comprar xBRL", [passoAprovar(t.endereco, S.imp.ReservaBRL, v, `Autorizar ${t.simbolo}`), { rotulo: "Emitir xBRL", fn: (o) => r.emitir(t.endereco, v, minimo, o) }]);
       } else {
         const v = lerValor($("#res-valor").value, 18);
@@ -1007,34 +1070,30 @@ async function criarTrabalho() {
   const dias = Math.max(1, Math.min(365, Number($("#tn-prazo").value) || 7));
   const trabTxt = $("#tn-trab").value.trim();
   if (trabTxt && !E.isAddress(trabTxt)) throw new Error("Endereço do trabalhador inválido");
-  let lat = 0;
-  let lon = 0;
-  if (m <= 1) {
-    const la = Number($("#tn-lat").value.replace(",", "."));
-    const lo = Number($("#tn-lon").value.replace(",", "."));
-    if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180 || (la === 0 && lo === 0)) throw new Error("Informe o local (use o GPS ou digite latitude e longitude)");
-    lat = paraMicro(la);
-    lon = paraMicro(lo);
-  }
+  const palavras = valor >= E.parseEther("1000") ? 6 : 5;
   let codigo = null;
-  if (m === 1 || $("#tn-cod")?.checked) codigo = gerarCodigoEntrega(valor >= E.parseEther("1000") ? 6 : 5);
+  if (m === 1 || $("#tn-cod")?.checked) codigo = gerarCodigoEntrega(palavras);
   const codigoHash = codigo ? hashCodigo(S.imp.EscrowTrabalho, S.endereco, codigo) : E.ZeroHash;
   if (codigo) guardarCodigo(codigoHash, codigo);
+  const chegada = m === 0 ? gerarCodigoEntrega(palavras) : null;
+  const chegadaHash = chegada ? hashChegada(S.imp.EscrowTrabalho, S.endereco, chegada) : E.ZeroHash;
+  if (chegada) guardarCodigo(chegadaHash, chegada);
   const p = {
     modalidade: m,
     trabalhador: trabTxt ? E.getAddress(trabTxt) : E.ZeroAddress,
     valor,
     prazo: BigInt(agora() + dias * 86400),
-    lat,
-    lon,
     etapas: m === 3 ? Math.max(2, Math.min(50, Number($("#tn-etapas").value) || 2)) : 1,
     codigoHash,
+    chegadaHash,
     descricao: $("#tn-desc").value.trim().slice(0, 140),
   };
   await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar xBRL"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
-  if (codigo) {
-    modal(`<h2>✅ Pagamento travado</h2><p>Código de liberação (5 palavras) — entregue <b>só</b> a quem vai receber o serviço/entrega:</p><div class="codigo">${esc(codigo)}</div>
-      <p class="mudo">Ele também fica salvo neste aparelho, na tela do trabalho.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  if (codigo || chegada) {
+    modal(`<h2>✅ Pagamento travado</h2>
+      ${chegada ? `<p><b>📍 Código de chegada</b> — deixe no local ou mostre na porta:</p>${qrSvg(chegada)}<div class="codigo" id="cod-chegada">${esc(chegada)}</div>` : ""}
+      ${codigo ? `<p><b>🔑 Código de ${m === 1 ? "entrega" : "liberação"}</b> — entregue <b>só</b> a quem recebe:</p>${qrSvg(codigo)}<div class="codigo" id="cod-liberacao">${esc(codigo)}</div>` : ""}
+      <p class="mudo">Os códigos também ficam salvos neste aparelho, na tela do trabalho.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   }
   ir("TRABALHOS", { aba: "meus" });
 }
@@ -1066,19 +1125,15 @@ async function acaoTrabalho(nome) {
     },
     codigo: () => {
       const cod = normalizarCodigo($("#tr-cod").value);
-      if (!codigoTemFormatoValido(cod)) throw new Error("O código tem 5 palavras. Confira com quem recebe.");
+      if (!codigoTemFormatoValido(cod)) throw new Error("O código tem 5 ou 6 palavras. Confira com quem recebe.");
       if (hashCodigo(S.imp.EscrowTrabalho, t.cliente, cod) !== t.codigoHash) throw new Error("Código incorreto");
       return executar("Confirmar com código", [{ rotulo: "Liberar com código", fn: (o) => k.confirmarComCodigo(id, cod, o) }]);
     },
-    checkIn: async () => {
-      modal(`<div class="giro"></div><h2>Lendo GPS</h2><p class="mudo">Fique em céu aberto, perto do local.</p>`);
-      const g = await lerGps();
-      if (g.precisao > ESCROW.precisaoMaxGpsMetros) throw new Error(`GPS impreciso (±${Math.round(g.precisao)} m). Precisa de ±${ESCROW.precisaoMaxGpsMetros} m ou melhor.`);
-      const lat = paraMicro(g.lat);
-      const lon = paraMicro(g.lon);
-      const d = distanciaMetros(t.lat, t.lon, lat, lon);
-      if (d > ESCROW.raioMaxMetros) throw new Error(`Você está a ${Math.round(d)} m do local. Chegue a até ${ESCROW.raioMaxMetros} m.`);
-      return executar(`Check-in a ${Math.round(d)} m`, [{ rotulo: "Registrar presença", fn: (o) => k.checkIn(id, lat, lon, o) }]);
+    chegada: () => {
+      const cod = normalizarCodigo($("#tr-chegada").value);
+      if (!codigoTemFormatoValido(cod)) throw new Error("O código de chegada tem 5 ou 6 palavras. Confira no local.");
+      if (hashChegada(S.imp.EscrowTrabalho, t.cliente, cod) !== t.chegadaHash) throw new Error("Código de chegada incorreto");
+      return executar("Confirmar chegada", [{ rotulo: "Registrar que cheguei", fn: (o) => k.confirmarChegada(id, cod, o) }]);
     },
   }[nome];
   if (!f) return;

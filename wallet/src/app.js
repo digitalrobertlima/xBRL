@@ -1,15 +1,19 @@
 // =====================================================================
-// xBRL — Carteira Nativa (PWA) — máquina de estados travada
+// BRLS — Carteira Nativa (PWA) — máquina de estados travada
 // - Só transições declaradas em TRANSICOES são possíveis (botão "voltar" do aparelho não fura o bloqueio).
 // - A frase/chave só existe na memória enquanto a carteira está desbloqueada (auto-bloqueio em 5 min).
 // - Ações que movem dinheiro exigem "segurar para confirmar"; desbloqueio exige "deslizar" + PIN.
 // - Chegada ao local é comprovada por código/QR (palavras), nunca por GPS (falsificável).
 // =====================================================================
+import { carregarImplantacaoBeta } from "./config.js";
 import { ABIS, COFRE, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
 import * as K from "./keystore.js";
 import * as G from "./gas-tank.js";
 import { EscrowClient, REGRAS_NIVEL, codigoGuardado, codigoTemFormatoValido, gerarCodigoEntrega, guardarCodigo, hashChegada, hashCodigo, hashDevolucao, idConversa, normalizarCodigo } from "./escrow-client.js";
 import { Chat, MAX_CARACTERES } from "./chat.js";
+import * as SG from "./semgas.js";
+import { marca, roseta } from "./marca.js";
+import { ProvedorRotativo } from "./rpc.js";
 import qrcode from "./vendor/qrcode.mjs";
 
 const E = globalThis.ethers;
@@ -80,6 +84,7 @@ function ir(destino, params = {}) {
 // O botão "voltar" do sistema nunca sai do estado atual de forma insegura.
 history.pushState({ trava: true }, "", location.href);
 window.addEventListener("popstate", () => {
+  if (location.hash.startsWith("#" + SG.PREFIXO)) return receberPedidoDoLink(); // link de pedido sem gás, não é "voltar"
   history.pushState({ trava: true }, "", location.href);
   if (ABERTAS.includes(S.tela) && S.tela !== "INICIO") ir("INICIO");
 });
@@ -119,7 +124,7 @@ const MENSAGENS = {
   LimiteJanelaResgate: "Limite de resgate das últimas 24 h atingido (proteção da Fase 2). Tente mais tarde.",
   LimiteEmissaoDiaria: "Limite diário de emissão com este lastro atingido (proteção contra drenagem). Use o outro lastro ou tente amanhã.",
   ChegadaObrigatoria: "O trabalhador ainda não confirmou a chegada com o código.",
-  ValorBaixoParaAvaliar: "Só trabalhos a partir de 10 xBRL podem ser avaliados.",
+  ValorBaixoParaAvaliar: "Só trabalhos a partir de 10 BRLS podem ser avaliados.",
   EmissaoPausada: "Emissão com este lastro está pausada. Resgates seguem livres.",
   SaidaMinimaNaoAtingida: "A cotação mudou. Atualize e tente de novo.",
   CodigoIncorreto: "Código incorreto.",
@@ -137,7 +142,7 @@ const MENSAGENS = {
   PrecoIndisponivel: "Preço da cripto indisponível ou divergente agora. Pagar dívida e depositar continuam liberados.",
   GarantiaInsuficiente: "Garantia insuficiente para isso. Deposite mais ou emita menos.",
   TetoDeDivida: "O teto de emissão deste cofre foi atingido (limite da versão beta).",
-  DividaMinima: "A dívida precisa ser zero ou pelo menos 10 xBRL.",
+  DividaMinima: "A dívida precisa ser zero ou pelo menos 10 BRLS.",
   PosicaoSaudavel: "Essa posição está saudável: não pode ser liquidada.",
   ColateralInsuficiente: "Você não tem essa quantidade depositada.",
   MensagemInvalida: "Mensagem grande demais.",
@@ -151,7 +156,7 @@ function traduzirErro(e) {
   const msg = String(e?.shortMessage || e?.message || e);
   if (/insufficient funds/i.test(msg)) return "POL insuficiente para a taxa da rede. Abasteça o tanque.";
   if (/user rejected|denied/i.test(msg)) return "Operação cancelada.";
-  if (/missing revert data|execution reverted|CALL_EXCEPTION/i.test(msg)) return "A rede recusou a operação. O mais comum é faltar xBRL (o valor fica travado) ou POL para a taxa. Confira os saldos na tela Início.";
+  if (/missing revert data|execution reverted|CALL_EXCEPTION/i.test(msg)) return "A rede recusou a operação. O mais comum é faltar BRLS (o valor fica travado) ou POL para a taxa. Confira os saldos na tela Início.";
   if (/network|fetch|timeout|failed to detect/i.test(msg)) return "Sem conexão com a rede Polygon. Verifique a internet.";
   return msg.length > 180 ? msg.slice(0, 180) + "…" : msg;
 }
@@ -230,50 +235,13 @@ function escolherRedeInicial() {
   return REDES[pedida] ? pedida : REDE_PADRAO;
 }
 
-// RPC que troca sozinho de servidor quando um nó público recusa (403, limite, "archive", fora do ar).
-// Erros legítimos da própria transação (revert, saldo, nonce) não trocam de servidor: voltam para a tela.
-const ERRO_LEGITIMO = /revert|execution|insufficient funds|nonce|underpriced|already known|known transaction|intrinsic gas|gas required exceeds/i;
-class ProvedorRotativo extends E.JsonRpcApiProvider {
-  constructor(urls, chainId) {
-    const net = E.Network.from(chainId);
-    super(net, { staticNetwork: net, batchMaxCount: 1, cacheTimeout: -1, polling: true, pollingInterval: urls[0].includes("127.0.0.1") ? 1000 : 2000 });
-    this._urls = urls;
-    this._atual = 0;
-  }
-
-  async _send(payload) {
-    const corpo = JSON.stringify(payload);
-    const unico = Array.isArray(payload) ? payload[0] : payload;
-    let ultimo;
-    for (let n = 0; n < this._urls.length; n++) {
-      const k = (this._atual + n) % this._urls.length;
-      const url = this._urls[k];
-      try {
-        const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: corpo, signal: AbortSignal.timeout(12_000) });
-        if (!r.ok) throw new Error(`servidor ${new URL(url).host} respondeu ${r.status}`);
-        const j = await r.json();
-        const lista = Array.isArray(j) ? j : [j];
-        // Transação já enviada por um servidor anterior: não é erro, devolve o hash.
-        if (unico?.method === "eth_sendRawTransaction" && lista[0]?.error && /already known|known transaction/i.test(String(lista[0].error.message))) {
-          return [{ jsonrpc: "2.0", id: unico.id, result: E.keccak256(unico.params[0]) }];
-        }
-        const ruim = lista.find((x) => x?.error && x.error.code !== 3 && !ERRO_LEGITIMO.test(String(x.error.message || "")));
-        if (ruim) throw new Error(`servidor ${new URL(url).host}: ${ruim.error.message}`);
-        this._atual = k;
-        return lista;
-      } catch (e) {
-        ultimo = e;
-      }
-    }
-    throw ultimo;
-  }
-}
-
 async function conectarRede(chainId) {
   S.chainId = chainId;
   S.rede = REDES[chainId];
   S.provider = new ProvedorRotativo(S.rede.rpcs, chainId);
   S.imp = await carregarImplantacao(chainId);
+  const beta = await carregarImplantacaoBeta(chainId);
+  S.beta = beta && S.imp && beta.xBRL.toLowerCase() !== S.imp.xBRL.toLowerCase() ? beta : null;
   S.escrow = S.imp ? new EscrowClient(S.provider, chainId, S.imp.EscrowTrabalho, S.imp.blocoInicial) : null;
   S.chat = S.imp ? new Chat(S.provider, S.imp.Mensageiro, S.imp.blocoInicial) : null;
   const chip = $("#rede");
@@ -285,7 +253,7 @@ async function conectarRede(chainId) {
 
 async function montarListaTokens() {
   const lista = [];
-  if (S.imp) lista.push({ simbolo: "xBRL", nome: "Real Soberano", endereco: S.imp.xBRL, decimais: 18, principal: true });
+  if (S.imp) lista.push({ simbolo: "BRLS", nome: "Real Soberano", endereco: S.imp.xBRL, decimais: 18, principal: true });
   const conhecidos = new Set(lista.map((t) => t.endereco.toLowerCase()));
   for (const t of S.rede.tokens) {
     if (!conhecidos.has(t.endereco.toLowerCase())) {
@@ -337,6 +305,16 @@ async function executar(titulo, passos) {
     modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Verificando o tanque de gás…</p>`);
     const auto = await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts).catch(() => null);
     if (auto) toast(`⛽ Tanque abastecido com ${auto.simbolo}`);
+    // Sem POL para terminar? Se der, vira pedido sem gás (QR/link) para outra pessoa enviar.
+    const saldoPol = await S.provider.getBalance(S.endereco);
+    const precisa = opts.maxFeePerGas * 400_000n * BigInt(passos.length);
+    if (saldoPol < precisa) {
+      if (S.imp?.Encaminhador && passos.every((p) => p.chamada || p.permit)) {
+        await pedirSemGas(titulo, passos);
+        return "semgas";
+      }
+      throw new Error(`Falta POL para a taxa da rede (precisa de uns ${fmt(precisa, 18, 3)} POL, você tem ${fmt(saldoPol, 18, 3)}).`);
+    }
     for (const [i, p] of passos.entries()) {
       modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p>Passo ${i + 1} de ${passos.length}: ${esc(p.rotulo)}</p><p class="mudo">Assinando no seu aparelho…</p>`);
       const tx = await p.fn(opts);
@@ -355,10 +333,68 @@ async function executar(titulo, passos) {
   }
 }
 
+/** Monta o pedido sem gás e mostra o QR + link para outra pessoa enviar. */
+async function pedirSemGas(titulo, passos) {
+  const chamadas = passos.filter((p) => p.chamada).map((p) => p.chamada);
+  const ap = passos.find((p) => p.permit);
+  let permit = null;
+  if (ap && (await erc20(ap.permit.token).allowance(S.endereco, ap.permit.gastador)) < ap.permit.valor) permit = { token: ap.permit.token, valor: ap.permit.valor };
+  modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Assinando no seu aparelho (não custa nada)…</p>`);
+  const texto = await SG.assinar(S.carteira, S.provider, S.imp.Encaminhador, chamadas, permit);
+  const link = `${location.origin}${location.pathname}#${texto}`;
+  S.pedidoProprio = link;
+  modal(`<h2>⛽ Sem POL? Sem problema</h2>
+    <p>Você assinou: <b>${esc(titulo)}</b>. Agora peça para a outra pessoa (o cliente, por exemplo) <b>ler este QR</b> no app BRLS dela, em <b>Trabalhos → 📷 Ler pedido sem gás</b>. Ela paga a taxa e a ação vale como sua.</p>
+    ${qrSvg(texto)}
+    <button class="btn sec" data-acao="semgas-compartilhar">📤 Mandar por WhatsApp/link</button>
+    <p class="mudo">Vale por 2 horas e só para esta ação. Ninguém consegue usar para outra coisa.</p>
+    <button class="btn prim" data-acao="semgas-pronto">Já enviaram — atualizar</button>`);
+  return null;
+}
+
+/** Quem tem POL lê/abre o pedido de outra pessoa e envia por ela. */
+/** Link "…#brls:…" aberto com o app já rodando. */
+function receberPedidoDoLink() {
+  if (!location.hash.startsWith("#" + SG.PREFIXO)) return;
+  const txt = location.hash.slice(1);
+  history.replaceState({ trava: true }, "", location.pathname + location.search);
+  if (S.carteira && ABERTAS.includes(S.tela)) abrirPedidoSemGas(txt).catch(mostrarErro);
+  else S.pedidoRecebido = txt;
+}
+
+async function abrirPedidoSemGas(texto) {
+  if (!S.imp?.Encaminhador) throw new Error("Esta rede ainda não aceita pedidos sem gás");
+  const d = SG.decodificar(texto);
+  const descricoes = d.pedidos.map((p) => SG.descrever(p, S.imp));
+  await SG.conferir(S.provider, S.imp, d);
+  S.params.pedidoSemGas = d;
+  modal(`<h2>📨 Pedido sem gás</h2>
+    <p><b>${esc(curto(d.pedidos[0].from))}</b> assinou e pediu para você enviar:</p>
+    <div class="cartao">${descricoes.map((x) => `<p>• ${esc(x)}</p>`).join("")}${d.permit ? `<p>• autorizar o contrato a usar ${fmt(d.permit.valor)} BRLS dela (caução)</p>` : ""}</div>
+    <p class="mudo">Você paga só a taxa da rede (centavos). Nenhum dinheiro seu é usado na ação.</p>
+    ${botaoSegurar("enviar pela pessoa", "semgas-enviar")}
+    <button class="btn sec" data-acao="fechar-modal">Agora não</button>`);
+}
+
+/** Passo de envio de mensagem cifrada: também pode virar pedido sem gás. */
+function passoMensagem(rotulo, prep) {
+  const m = c("Mensageiro", true);
+  const args = [prep.conversa, prep.para, prep.cifrados, prep.registrar];
+  return { rotulo, fn: (o) => m.enviar(...args, o), chamada: { to: S.imp.Mensageiro, data: m.interface.encodeFunctionData("enviar", args), gas: 600_000 } };
+}
+
+/** Passo de uma ação do Escrow: pode virar pedido sem gás. */
+function passoEscrow(rotulo, metodo, args, gas = 500_000) {
+  const k = c("EscrowTrabalho", true);
+  return { rotulo, fn: (o) => k[metodo](...args, o), chamada: { to: S.imp.EscrowTrabalho, data: k.interface.encodeFunctionData(metodo, args), gas } };
+}
+
 /** Aprova só o necessário (nunca infinito). */
 function passoAprovar(token, gastador, valor, rotulo = "Autorizar") {
+  const ehBrls = S.imp && token.toLowerCase() === S.imp.xBRL.toLowerCase();
   return {
     rotulo,
+    permit: ehBrls ? { token, gastador, valor } : null,
     fn: async (o) => {
       const atual = await erc20(token).allowance(S.endereco, gastador);
       return atual >= valor ? null : erc20(token, true).approve(gastador, valor, o);
@@ -442,10 +478,10 @@ function tecladoPin(titulo, subtitulo, aoCompletar) {
 const TELAS = {};
 
 TELAS.BOAS_VINDAS = () => tela(`
-  <div class="cartao ouro" style="text-align:center">
-    <div class="marca" style="justify-content:center;font-size:30px"><span class="moeda" style="width:54px;height:54px;font-size:20px">R$</span><span>x<b>BRL</b></span></div>
-    <h1>O Real soberano, no seu bolso</h1>
-    <p class="mudo">Cada xBRL vale R$ 1, lastreado 1:1 em stablecoins de Real. Ninguém congela, ninguém confisca: a chave é só sua.</p>
+  <div class="abertura">
+    ${roseta({ tam: 168, tracos: 6, classe: "desenhar", rotulo: "Roseta do BRLS" })}
+    <h1 class="titulo-grande">O real que é só seu</h1>
+    <p>Cada BRLS vale R$ 1. Você guarda, paga, contrata e recebe por trabalho, sem banco no meio e sem ninguém poder congelar.</p>
   </div>
   <button class="btn prim" data-acao="criar">Criar minha carteira</button>
   <button class="btn sec" data-acao="restaurar">Já tenho as 12 palavras</button>
@@ -479,7 +515,7 @@ TELAS.CRIAR_FRASE = () => {
     <p class="mudo">Elas SÃO a sua carteira. Anote no papel, na ordem, e guarde longe de fotos e nuvem.</p>
     <ol class="palavras borrado" id="palavras">${p.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
     <button class="btn sec" data-acao="revelar">👁️ Mostrar palavras</button>
-    <div class="aviso">Nunca digite essas palavras em sites ou mensagens. Ninguém do xBRL vai pedir.</div>
+    <div class="aviso">Nunca digite essas palavras em sites ou mensagens. Ninguém do BRLS vai pedir.</div>
     ${botaoSegurar("confirmar que anotei", "anotei")}
     <button class="btn sec" data-acao="voltar-boas-vindas">Voltar</button>`);
 };
@@ -540,9 +576,10 @@ TELAS.CONFIRMAR_PIN = () =>
 TELAS.BLOQUEADA = async () => {
   const bio = K.temBiometria();
   tela(`
-    <div class="cartao ouro" style="text-align:center">
-      <p class="mudo">Carteira</p><p class="endereco" style="text-align:center">${esc(curto(K.enderecoSalvo()))}</p>
-      <h1>🔒 Bloqueada</h1>
+    <div class="abertura">
+      ${roseta({ tam: 120, tracos: 5 })}
+      <h1>Carteira bloqueada</h1>
+      <p class="serie">Nº ${esc(curto(K.enderecoSalvo()))}</p>
     </div>
     <div class="deslizar"><input type="range" id="deslize" min="0" max="100" value="0" aria-label="Deslize para desbloquear"><span>Deslize para desbloquear ➜</span></div>
     ${bio ? `<button class="btn sec" data-acao="biometria">👆 Usar biometria</button>` : ""}
@@ -566,6 +603,25 @@ function pedirPin() {
   });
 }
 
+/** Guia de primeiros passos: some sozinho quando a pessoa já fez tudo (ou toca em "Já sei usar"). */
+function primeirosPassos(pol, saldoX) {
+  let escondido = false;
+  try { escondido = localStorage.getItem("xbrl.guia.ok") === "1"; } catch { /* */ }
+  const passos = [
+    { feito: true, titulo: "Guardar as 12 palavras", texto: "São a chave do seu dinheiro. Papel, fora do celular." },
+    { feito: pol > 0n, titulo: "Ter um pouco de POL", texto: "É a moeda que paga a taxa da rede (centavos). Quem te contratar pode mandar junto com o trabalho.", ir: "RECEBER", botao: "Ver meu endereço" },
+    { feito: saldoX > 0n, titulo: "Ter BRLS", texto: "Receba por um trabalho, peça para alguém te enviar, ou troque BRZ por BRLS na Reserva.", ir: "RESERVA", botao: "Ir para a Reserva" },
+    { feito: false, titulo: "Fazer o primeiro trabalho", texto: "Veja as vagas abertas ou contrate alguém. O pagamento fica travado até o fim, seguro para os dois.", ir: "TRABALHOS", botao: "Ver trabalhos" },
+  ];
+  if (escondido || passos.every((p) => p.feito)) return "";
+  const proximo = passos.find((p) => !p.feito);
+  return `<section class="cartao guia" aria-label="Primeiros passos">
+    <h2>Primeiros passos</h2>
+    <ol class="passos">${passos.map((p) => `<li class="${p.feito ? "feito" : p === proximo ? "agora" : ""}"><b>${esc(p.titulo)}</b>${p === proximo ? `<p>${esc(p.texto)}</p><button class="btn prim" data-ir="${p.ir}">${esc(p.botao)}</button>` : ""}</li>`).join("")}</ol>
+    <button class="btn sec" data-acao="guia-ok">Já sei usar, esconder</button>
+  </section>`;
+}
+
 TELAS.INICIO = async () => {
   tela(`<div class="cartao"><div class="giro"></div></div>`);
   const [pol, saldos] = await Promise.all([
@@ -576,13 +632,15 @@ TELAS.INICIO = async () => {
   const xi = S.tokensInfo.findIndex((t) => t.principal);
   const saldoX = xi >= 0 ? saldos[xi] : 0n;
   tela(`
-    ${S.imp ? "" : `<div class="aviso">O protocolo xBRL ainda não foi implantado na rede ${esc(S.rede.nome)}. Você já pode guardar e enviar POL e stablecoins.</div>`}
+    ${S.imp ? "" : `<div class="aviso">O protocolo BRLS ainda não foi implantado na rede ${esc(S.rede.nome)}. Você já pode guardar e enviar POL e stablecoins.</div>`}
     ${S.imp?.beta ? `<div class="aviso">🧪 <b>Versão beta na rede real.</b> Limites baixos de propósito (reserva até R$ 1.000, cofre até R$ 500 por cripto). Contratos ainda não auditados: use só valores pequenos.</div>` : ""}
-    <div class="cartao ouro">
-      <p class="mudo">Saldo em xBRL</p>
-      <div class="saldo">${fmt(saldoX)}<small>xBRL</small></div>
-      <p class="mudo">≈ ${reais(saldoX)} · <span class="selo verde">inconfiscável</span></p>
-    </div>
+    <section class="cedula" aria-label="Seu saldo">
+      ${roseta({ tam: 230, tracos: 6, classe: "fundo desenhar", centro: "" })}
+      <p class="cedula-topo"><span>Real Soberano</span><span class="serie">Nº ${esc(curto(S.endereco))}</span></p>
+      <p class="saldo"><span class="cifra">R$</span>${fmt(saldoX)}</p>
+      <p class="cedula-pe">Saldo em BRLS · 1 BRLS = R$ 1 · ninguém congela</p>
+    </section>
+    ${primeirosPassos(pol, saldoX)}
     <div class="grade">
       <button class="atalho" data-ir="ENVIAR"><span>📤</span>Enviar</button>
       <button class="atalho" data-ir="RECEBER"><span>📥</span>Receber</button>
@@ -606,7 +664,7 @@ TELAS.INICIO = async () => {
 
 TELAS.RECEBER = () => tela(`
   <h1>Receber</h1>
-  <p class="mudo">Envie para este endereço somente pela rede <b>${esc(S.rede.nome)}</b>: xBRL, POL, BRZ, BRLA, USDC.</p>
+  <p class="mudo">Envie para este endereço somente pela rede <b>${esc(S.rede.nome)}</b>: BRLS, POL, BRZ, BRLA, USDC.</p>
   ${qrSvg(S.endereco)}
   <p class="mudo" style="text-align:center">Mostre este QR para quem vai te pagar.</p>
   <div class="endereco" id="meu-end">${esc(S.endereco)}</div>
@@ -648,35 +706,38 @@ TELAS.RESERVA = async () => {
   const r = c("ReservaBRL");
   const k = c("CofreCripto");
   const [fase, total, colat, supply, janela, colchao, dividaCofre, ruim, teto] = await Promise.all([r.fase(), r.lastroTotal(), r.colateralizacaoBps(), c("xBRL").totalSupply(), r.resgateDisponivelNaJanela(), k.colchao(), k.dividaTotalGlobal(), k.dividaRuim(), r.TETO_RESERVA()]);
+  const saldoBeta = S.beta ? await new E.Contract(S.beta.xBRL, ABIS.xBRL, S.provider).balanceOf(S.endereco).catch(() => 0n) : 0n;
+  S.params.saldoBeta = saldoBeta;
   const lastros = S.tokensInfo.filter((t) => t.lastro && S.imp.lastros.map((x) => x.toLowerCase()).includes(t.endereco.toLowerCase()));
   const modo = S.params.modo || "emitir";
   const colatTxt = colat > 10n ** 30n ? "—" : `${(Number(colat) / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
   tela(`
     <h1>Reserva BRL</h1>
+    ${saldoBeta > 0n ? `<div class="aviso">🧪 Você tem <b>${fmt(saldoBeta)}</b> da versão de testes (beta). Ela foi substituída: resgate em BRZ e emita BRLS novo aqui embaixo.<button class="btn sec" data-acao="beta-resgatar">Resgatar a versão beta em BRZ</button></div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Fase</span><b>${Number(fase) === 1 ? "1 · resgate livre" : "2 · resgate até 20%/dia"}</b></div>
-      <div class="linha"><span>xBRL em circulação</span><b>${fmt(supply)}</b></div>
+      <div class="linha"><span>BRLS em circulação</span><b>${fmt(supply)}</b></div>
       <div class="linha"><span>Lastro total</span><b>${reais(total)}</b></div>
       <div class="linha"><span>Colateralização</span><b>${colatTxt}</b></div>
       ${Number(fase) === 2 ? `<div class="linha"><span>Resgate livre nas 24 h</span><b>${fmt(janela)}</b></div>` : ""}
-      <div class="linha"><span>xBRL emitido no cofre cripto</span><b>${fmt(dividaCofre)}</b></div>
-      <div class="linha"><span>🛟 Colchão de proteção</span><b>${fmt(colchao)} xBRL</b></div>
+      <div class="linha"><span>BRLS emitido no cofre cripto</span><b>${fmt(dividaCofre)}</b></div>
+      <div class="linha"><span>🛟 Colchão de proteção</span><b>${fmt(colchao)} BRLS</b></div>
       ${ruim > 0n ? `<div class="linha"><span>Prejuízo descoberto (público)</span><b>${fmt(ruim)}</b></div>` : ""}
       ${teto > 0n ? `<div class="linha"><span>Teto da beta</span><b>${reais(teto)}</b></div>` : ""}
       <p class="mudo">Metade de toda taxa vai ao colchão, que cobre prejuízo se uma cripto despencar rápido demais.</p>
     </div>
-    <button class="btn sec" data-ir="COFRE">🏦 Emitir xBRL com garantia em cripto</button>
+    <button class="btn sec" data-ir="COFRE">🏦 Emitir BRLS com garantia em cripto</button>
     <div class="seg" role="group" aria-label="Operação">
-      <button data-acao="modo-emitir" aria-pressed="${modo === "emitir"}">Comprar xBRL</button>
+      <button data-acao="modo-emitir" aria-pressed="${modo === "emitir"}">Comprar BRLS</button>
       <button data-acao="modo-resgatar" aria-pressed="${modo === "resgatar"}">Resgatar em reais</button>
     </div>
     <label for="res-lastro">${modo === "emitir" ? "Pagar com" : "Receber em"}</label>
     <select id="res-lastro">${lastros.map((t, i) => `<option value="${i}">${esc(t.simbolo)}</option>`).join("")}</select>
-    <label for="res-valor">${modo === "emitir" ? "Quantidade do lastro" : "Quantidade de xBRL"}</label>
+    <label for="res-valor">${modo === "emitir" ? "Quantidade do lastro" : "Quantidade de BRLS"}</label>
     <input id="res-valor" class="grande" inputmode="decimal" placeholder="0,00">
     <div id="res-cot" class="mudo"></div>
     ${S.chainId !== 137 && lastros[0] ? `<button class="btn sec" data-acao="torneira">🚰 Pegar 10.000 ${esc(lastros[0].simbolo)} de teste</button>` : ""}
-    ${botaoSegurar(modo === "emitir" ? "comprar xBRL" : "resgatar", "reserva")}
+    ${botaoSegurar(modo === "emitir" ? "comprar BRLS" : "resgatar", "reserva")}
     <p class="mudo">Taxa fixa de 0,1%. Quem traz o lastro que já sobra (ou leva o que está faltando) paga até 0,40% a mais, e esse valor fica na reserva como lastro extra. Cada lastro tem um teto de emissão por dia, contra drenagem. Resgates nunca podem ser pausados.</p>`);
   S.params.lastros = lastros;
   const cotar = async () => {
@@ -686,7 +747,7 @@ TELAS.RESERVA = async () => {
       if (modo === "emitir") {
         const v = lerValor($("#res-valor").value, t.decimais);
         const [[liq, taxa, spread], hoje] = await Promise.all([r.cotarEmissao(t.endereco, v), r.emissaoDisponivelNaJanela(t.endereco)]);
-        out.innerHTML = `Você recebe <b>${fmt(liq)} xBRL</b> · taxa ${fmt(taxa, 18, 4)}${spread ? ` · lastro extra ${fmt(spread, 18, 4)}` : ""}<br>Limite de hoje com ${esc(t.simbolo)}: ${fmt(hoje)}`;
+        out.innerHTML = `Você recebe <b>${fmt(liq)} BRLS</b> · taxa ${fmt(taxa, 18, 4)}${spread ? ` · lastro extra ${fmt(spread, 18, 4)}` : ""}<br>Limite de hoje com ${esc(t.simbolo)}: ${fmt(hoje)}`;
       } else {
         const v = lerValor($("#res-valor").value, 18);
         const [pago, taxa, spread] = await r.cotarResgate(t.endereco, v);
@@ -736,7 +797,7 @@ async function lerExtrato() {
   const eu = E.zeroPadValue(S.endereco, 32);
   const tokens = new Map();
   for (const t of S.tokensInfo) if (t.endereco) tokens.set(t.endereco.toLowerCase(), t);
-  if (S.imp?.xBRL) tokens.set(S.imp.xBRL.toLowerCase(), tokens.get(S.imp.xBRL.toLowerCase()) || { simbolo: "xBRL", decimais: 18, endereco: S.imp.xBRL });
+  if (S.imp?.xBRL) tokens.set(S.imp.xBRL.toLowerCase(), tokens.get(S.imp.xBRL.toLowerCase()) || { simbolo: "BRLS", decimais: 18, endereco: S.imp.xBRL });
   const enderecos = [...tokens.values()].map((t) => t.endereco);
   const atual = await S.provider.getBlockNumber();
   const inicio = Number(S.imp?.blocoInicial) || Math.max(0, atual - 500_000);
@@ -787,11 +848,11 @@ function rotuloMov(i) {
   }
   nomes[CREATOR_TREASURY.toLowerCase()] = "Criador da rede";
   const nome = (a) => nomes[a.toLowerCase()] || curto(a);
-  if (i.de.toLowerCase() === Z) return { icone: "🪙", titulo: "Emissão", detalhe: "xBRL criado para você", sinal: 1 };
-  if (i.para.toLowerCase() === Z) return { icone: "🔥", titulo: "Queima", detalhe: "xBRL destruído", sinal: -1 };
+  if (i.de.toLowerCase() === Z) return { icone: "🪙", titulo: "Emissão", detalhe: "BRLS criado para você", sinal: 1 };
+  if (i.para.toLowerCase() === Z) return { icone: "🔥", titulo: "Queima", detalhe: "BRLS destruído", sinal: -1 };
   const ehXbrl = S.imp && i.t.endereco.toLowerCase() === S.imp.xBRL.toLowerCase();
-  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.ReservaBRL.toLowerCase()) return { icone: "🔥", titulo: "Resgate", detalhe: "xBRL devolvido à Reserva e queimado", sinal: -1 };
-  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.CofreCripto.toLowerCase()) return { icone: "🔥", titulo: "Dívida paga", detalhe: "xBRL pago ao cofre e queimado", sinal: -1 };
+  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.ReservaBRL.toLowerCase()) return { icone: "🔥", titulo: "Resgate", detalhe: "BRLS devolvido à Reserva e queimado", sinal: -1 };
+  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.CofreCripto.toLowerCase()) return { icone: "🔥", titulo: "Dívida paga", detalhe: "BRLS pago ao cofre e queimado", sinal: -1 };
   if (i.para.toLowerCase() === eu) return { icone: "⬇️", titulo: "Recebido", detalhe: `de ${nome(i.de)}`, sinal: 1 };
   return { icone: "⬆️", titulo: "Enviado", detalhe: `para ${nome(i.para)}`, sinal: -1 };
 }
@@ -801,11 +862,11 @@ TELAS.EXTRATO = async () => {
   tela(`<h1>🧾 Extrato</h1><div class="cartao"><div class="giro"></div><p class="mudo">Lendo a blockchain…</p></div>`);
   const { itens, total } = await lerExtrato();
   const filtro = S.params.filtro || "todos";
-  const lista = itens.filter((i) => filtro === "todos" || (filtro === "xbrl" ? i.t.simbolo === "xBRL" : i.t.simbolo !== "xBRL"));
+  const lista = itens.filter((i) => filtro === "todos" || (filtro === "xbrl" ? i.t.simbolo === "BRLS" : i.t.simbolo !== "BRLS"));
   tela(`
     <h1>🧾 Extrato</h1>
-    <p class="mudo">Tudo que entrou e saiu da sua carteira em moedas (emissões e queimas de xBRL incluídas). Mostrando as ${itens.length} mais recentes de ${total}.</p>
-    <div class="seg" role="group"><button data-acao="ext-todos" aria-pressed="${filtro === "todos"}">Tudo</button><button data-acao="ext-xbrl" aria-pressed="${filtro === "xbrl"}">xBRL</button><button data-acao="ext-outras" aria-pressed="${filtro === "outras"}">Outras moedas</button></div>
+    <p class="mudo">Tudo que entrou e saiu da sua carteira em moedas (emissões e queimas de BRLS incluídas). Mostrando as ${itens.length} mais recentes de ${total}.</p>
+    <div class="seg" role="group"><button data-acao="ext-todos" aria-pressed="${filtro === "todos"}">Tudo</button><button data-acao="ext-xbrl" aria-pressed="${filtro === "xbrl"}">BRLS</button><button data-acao="ext-outras" aria-pressed="${filtro === "outras"}">Outras moedas</button></div>
     <div class="cartao">
       ${lista.map((i) => {
         const r = rotuloMov(i);
@@ -856,31 +917,31 @@ TELAS.COFRE = async () => {
   S.params.cofre = { x, saldoTok, saldoX };
   const saude = x.pos.divida === 0n ? "sem dívida" : x.razao >= INFINITO ? "—" : pct(x.razao);
   const perto = x.pos.divida > 0n && x.razao < BigInt(x.a.crLiquidacaoBps) + 2_000n;
-  const MODOS = { depositar: "Depositar", emitir: "Emitir xBRL", quitar: "Pagar dívida", retirar: "Retirar" };
+  const MODOS = { depositar: "Depositar", emitir: "Emitir BRLS", quitar: "Pagar dívida", retirar: "Retirar" };
   tela(`
     <h1>🏦 Cofre cripto</h1>
-    <p class="mudo">Deposite cripto como garantia e emita xBRL sem vender. A garantia continua sua: ninguém mexe nela enquanto a posição estiver saudável. Sem juros.</p>
+    <p class="mudo">Deposite cripto como garantia e emita BRLS sem vender. A garantia continua sua: ninguém mexe nela enquanto a posição estiver saudável. Sem juros.</p>
     <div class="seg" role="group" aria-label="Cripto">${ativos.map((y) => `<button data-acao="cofre-ativo-${y.i}" aria-pressed="${y.i === sel}">${esc(y.simbolo)}</button>`).join("")}</div>
     <div class="cartao ${perto ? "" : "ouro"}">
       <div class="linha"><span>Preço de 1 ${esc(x.simbolo)}</span><b>${x.ok ? reais(x.preco) : "indisponível"}</b></div>
       <div class="linha"><span>Sua garantia</span><b>${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)} ≈ ${reais(x.valorGarantia)}</b></div>
-      <div class="linha"><span>Sua dívida</span><b>${fmt(x.pos.divida)} xBRL</b></div>
+      <div class="linha"><span>Sua dívida</span><b>${fmt(x.pos.divida)} BRLS</b></div>
       <div class="linha"><span>Saúde (garantia ÷ dívida)</span><b>${esc(saude)}</b></div>
       ${x.precoLiquidacao ? `<div class="linha"><span>Liquidação se ${esc(x.simbolo)} cair a</span><b>${reais(x.precoLiquidacao)}</b></div>` : ""}
-      <div class="linha"><span>Pode emitir agora</span><b>${fmt(x.podeEmitir)} xBRL</b></div>
-      <p class="mudo">Emissão até ${pct(x.a.crEmissaoBps)} de garantia · liquidação abaixo de ${pct(x.a.crLiquidacaoBps)} · taxa única de 0,5% somada à dívida · limite total deste cofre: ${fmt(x.a.tetoDivida, 18, 0)} xBRL</p>
+      <div class="linha"><span>Pode emitir agora</span><b>${fmt(x.podeEmitir)} BRLS</b></div>
+      <p class="mudo">Emissão até ${pct(x.a.crEmissaoBps)} de garantia · liquidação abaixo de ${pct(x.a.crLiquidacaoBps)} · taxa única de 0,5% somada à dívida · ${x.a.tetoDivida >= 10n ** 30n ? "sem limite total" : `limite total deste cofre: ${fmt(x.a.tetoDivida, 18, 0)} BRLS`}</p>
     </div>
     ${perto ? `<div class="erro">⚠️ Sua posição está perto da liquidação. Pague parte da dívida ou deposite mais ${esc(x.simbolo)}.</div>` : ""}
     ${x.ok && x.okEmissao ? "" : `<div class="aviso">${x.ok ? "A Chainlink está atrasada ou diverge da Uniswap. Por segurança, emitir e retirar garantia ficam parados até as fontes voltarem a concordar." : "O preço está indisponível. Por segurança, emitir, retirar e liquidar ficam parados."} Depositar e pagar dívida continuam sempre livres.</div>`}
     <div class="seg" role="group" aria-label="Operação">${Object.entries(MODOS).map(([m, r]) => `<button data-acao="cofre-modo-${m}" aria-pressed="${m === modo}">${r}</button>`).join("")}</div>
-    <label for="cf-valor">${modo === "depositar" || modo === "retirar" ? `Quantidade de ${esc(x.simbolo)}` : "Quantidade de xBRL"}</label>
+    <label for="cf-valor">${modo === "depositar" || modo === "retirar" ? `Quantidade de ${esc(x.simbolo)}` : "Quantidade de BRLS"}</label>
     <input id="cf-valor" class="grande" inputmode="decimal" placeholder="0,00">
-    <p class="mudo">${{ depositar: `Na carteira: ${fmt(saldoTok, x.decimais, 4)} ${esc(x.simbolo)}`, emitir: `Máximo agora: ${fmt(x.podeEmitir)} xBRL (deixe uma folga: se a cripto cair, a saúde cai)`, quitar: `Dívida: ${fmt(x.pos.divida)} · você tem ${fmt(saldoX)} xBRL`, retirar: `Depositado: ${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)}` }[modo]}</p>
+    <p class="mudo">${{ depositar: `Na carteira: ${fmt(saldoTok, x.decimais, 4)} ${esc(x.simbolo)}`, emitir: `Máximo agora: ${fmt(x.podeEmitir)} BRLS (deixe uma folga: se a cripto cair, a saúde cai)`, quitar: `Dívida: ${fmt(x.pos.divida)} · você tem ${fmt(saldoX)} BRLS`, retirar: `Depositado: ${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)}` }[modo]}</p>
     ${modo === "quitar" && x.pos.divida > 0n ? `<button class="btn sec" data-acao="cofre-tudo">Pagar a dívida toda</button>` : ""}
     ${S.chainId !== 137 && modo === "depositar" ? `<button class="btn sec" data-acao="cofre-torneira">🚰 Pegar ${esc(x.simbolo)} de teste</button>` : ""}
-    ${botaoSegurar({ depositar: "depositar", emitir: "emitir xBRL", quitar: "pagar a dívida", retirar: "retirar" }[modo], "cofre")}
+    ${botaoSegurar({ depositar: "depositar", emitir: "emitir BRLS", quitar: "pagar a dívida", retirar: "retirar" }[modo], "cofre")}
     <details class="cartao"><summary><b>⚖️ Liquidar posições em risco</b></summary>
-      <p class="mudo">Qualquer pessoa pode pagar a dívida de uma posição abaixo de ${pct(x.a.crLiquidacaoBps)} e receber a garantia equivalente + 10% de bônus. Isso protege o xBRL de todo mundo.</p>
+      <p class="mudo">Qualquer pessoa pode pagar a dívida de uma posição abaixo de ${pct(x.a.crLiquidacaoBps)} e receber a garantia equivalente + 10% de bônus. Isso protege o BRLS de todo mundo.</p>
       <button class="btn sec" data-acao="cofre-risco">🔎 Procurar posições em risco</button>
       <div id="cf-risco"></div>
     </details>`);
@@ -923,7 +984,7 @@ async function procurarRisco() {
 /** Mostra os números que sustentam o nível (contas falsas não conseguem forjar tempo nem pessoas distintas). */
 function resumoReputacao(rep) {
   const prox = REGRAS_NIVEL[rep.nivel + 1];
-  return `<p class="mudo">${Number(rep.concluidos)} trabalhos · ${Number(rep.contrapartes)} ${Number(rep.contrapartes) === 1 ? "pessoa diferente" : "pessoas diferentes"} · ${fmt(rep.volume, 18, 0)} xBRL movimentados ·
+  return `<p class="mudo">${Number(rep.concluidos)} trabalhos · ${Number(rep.contrapartes)} ${Number(rep.contrapartes) === 1 ? "pessoa diferente" : "pessoas diferentes"} · ${fmt(rep.volume, 18, 0)} BRLS movimentados ·
     média ${rep.media.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} ★ (${Number(rep.avaliacoes)} avaliadores) · ${Number(rep.disputas)} disputas · conta com ${rep.idadeDias} dias</p>
     ${prox ? `<p class="mudo">Próximo nível: ${prox.contrapartes} pessoas diferentes, ${prox.avaliacoes} avaliadores, R$ ${prox.volume.toLocaleString("pt-BR")} movimentados e ${prox.idade} dias de conta.</p>` : ""}`;
 }
@@ -937,7 +998,7 @@ function qrSvg(texto) {
 }
 
 /** Abre a câmera e lê um QR (Android/Chrome). Sem suporte: pede para digitar as palavras. */
-async function escanearQR(alvo) {
+async function escanearQR(alvo, aoLer = null) {
   if (!("BarcodeDetector" in window) || !navigator.mediaDevices?.getUserMedia) {
     toast("Este aparelho não lê QR aqui. Digite as palavras.");
     return;
@@ -958,12 +1019,24 @@ async function escanearQR(alvo) {
       const r = await detector.detect(v);
       if (r[0]?.rawValue) {
         const lido = String(r[0].rawValue);
+        if (aoLer) {
+          parar();
+          fecharModal();
+          return aoLer(lido);
+        }
         const end = lido.match(/0x[0-9a-fA-F]{40}/);
         $(alvo).value = alvo === "#env-para" ? (end ? end[0] : "") : normalizarCodigo(lido);
         $(alvo).dispatchEvent(new Event("change"));
         parar();
-        fecharModal();
-        toast("Código lido ✅");
+        // Leu: já mostra o próximo passo na hora, sem a pessoa ter que procurar o botão.
+        const proximo = { "#tr-cod": ["confirmar com o código", "tr-codigo", "Isso libera o pagamento agora."], "#tr-chegada": ["confirmar que cheguei", "tr-chegada", "Isso registra que você chegou ao local."], "#tr-dev": ["confirmar a devolução", "tr-devolucao", "Isso devolve o pagamento ao cliente e a sua caução para você."] }[alvo];
+        if (proximo) {
+          modal(`<h2>✅ Código lido</h2><div class="codigo">${esc($(alvo).value)}</div><p>${esc(proximo[2])}</p>${botaoSegurar(proximo[0], proximo[1])}<button class="btn sec" data-acao="fechar-modal">Agora não</button>`);
+        } else {
+          fecharModal();
+          toast(alvo === "#env-para" ? "Endereço lido ✅ Agora digite o valor." : "Código lido ✅");
+          if (alvo === "#env-para") $("#env-valor")?.focus();
+        }
         return;
       }
     } catch { /* quadro ilegível: tenta o próximo */ }
@@ -994,6 +1067,7 @@ TELAS.TRABALHOS = async () => {
     <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
       ${resumoReputacao(rep)}</div>
     <button class="btn prim" data-ir="TRABALHO_NOVO">+ Contratar alguém</button>
+    ${S.imp?.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás (de quem está sem POL)</button>` : ""}
     <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas (${vagas.length})</button>${arbitragens.length ? `<button data-acao="aba-arbitragens" aria-pressed="${aba === "arbitragens"}">⚖️ Árbitro (${arbitragens.length})</button>` : ""}</div>
     ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
 };
@@ -1008,14 +1082,16 @@ TELAS.TRABALHO_NOVO = () => {
     ${m === 0 || m === 1 ? `<label for="tn-regiao">📍 Bairro e cidade ${m === 1 ? "da entrega" : "do serviço"} (obrigatório, aparece para todos)</label><input id="tn-regiao" maxlength="36" placeholder="Ex.: Savassi, Belo Horizonte">
     <label for="tn-endereco">🏠 Endereço completo (obrigatório)</label><input id="tn-endereco" maxlength="200" placeholder="Rua, número, complemento, referência">
     <p class="mudo">Por segurança, o endereço completo não fica público: só a pessoa aceita vê, pela conversa cifrada do trabalho.</p>` : ""}
-    <label for="tn-valor">Pagamento (xBRL)</label><input id="tn-valor" class="grande" inputmode="decimal" placeholder="0,00">
+    <label for="tn-kit">⛽ Gás para o trabalhador (POL)</label><input id="tn-kit" inputmode="decimal" value="1">
+    <p class="mudo">Vai junto com o pagamento e chega na carteira de quem for trabalhar, para a pessoa nunca travar por falta de taxa: 1 POL dá para dezenas de operações. Se ninguém aceitar, volta para você. Pode diminuir ou deixar 0.</p>
+    <label for="tn-valor">Pagamento (BRLS)</label><input id="tn-valor" class="grande" inputmode="decimal" placeholder="0,00">
     <label for="tn-prazo">Prazo (dias)</label><input id="tn-prazo" inputmode="numeric" value="7">
     ${m === 3 ? `<label for="tn-etapas">Número de etapas (2 a 50)</label><input id="tn-etapas" inputmode="numeric" value="3">` : ""}
     <label for="tn-trab">Trabalhador (opcional: vazio = vaga aberta)</label><input id="tn-trab" autocomplete="off" autocapitalize="none" placeholder="0x…">
     ${m === 0 ? `<div class="ok">Vamos gerar um <b>código de chegada</b> (palavras + QR). Deixe no local ou mostre na porta: o trabalhador só comprova que chegou com ele.</div>` : ""}
     ${m === 1 ? `<div class="ok">Vamos gerar um <b>código de entrega</b> (palavras + QR). Passe só para quem vai receber: o entregador só entrega a mercadoria quando recebe o código, e o pagamento sai na hora. Sem código, sem entrega: não existe "entreguei e não me deram o código".</div>
       <label class="linha" style="color:var(--txt)"><span>Exigir caução do entregador (recomendado para mercadoria de valor)</span><input type="checkbox" id="tn-caucao-on" style="width:auto" checked></label>
-      <label for="tn-caucao">Caução (mín. ${ESCROW.caucaoMinima} xBRL, de preferência o valor da mercadoria)</label><input id="tn-caucao" inputmode="decimal" value="${ESCROW.caucaoMinima}">
+      <label for="tn-caucao">Caução (mín. ${ESCROW.caucaoMinima} BRLS, de preferência o valor da mercadoria)</label><input id="tn-caucao" inputmode="decimal" value="${ESCROW.caucaoMinima}">
       <p class="mudo">A caução fica travada até o fim. Com o código de entrega, volta para o entregador. Se ele trouxer a mercadoria de volta, você dá o <b>código de devolução</b> e ele recupera a caução. Se ele sumir com a mercadoria, a caução fica com você.</p>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar o pagamento</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
     ${m !== 1 ? `<details class="cartao"><summary><b>⚖️ Árbitros em caso de disputa (opcional)</b></summary>
       <p class="mudo">Você indica uma pessoa de confiança; o trabalhador indica outra ao aceitar. Se houver disputa, os dois árbitros propõem uma divisão: se concordarem, ela é executada na hora. Sem acordo em 30 dias, vale a média das propostas.</p>
@@ -1037,6 +1113,8 @@ TELAS.TRABALHO = async () => {
   const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
   const chegada = souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
   const devolucao = souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
+  const meuPol = await S.provider.getBalance(S.endereco).catch(() => 10n ** 18n);
+  const semPol = meuPol < 10n ** 16n && !!S.imp.Encaminhador;
   const chaveEnd = t.modalidade === 0 ? t.chegadaHash : t.codigoHash;
   let enderecoGuardado = null;
   let enderecoEnviado = false;
@@ -1067,8 +1145,8 @@ TELAS.TRABALHO = async () => {
     <h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>
     <div class="cartao">
-      <div class="linha"><span>Valor</span><b>${fmt(t.valor)} xBRL</b></div>
-      <div class="linha"><span>Já pago</span><b>${fmt(t.pago)} xBRL</b></div>
+      <div class="linha"><span>Valor</span><b>${fmt(t.valor)} BRLS</b></div>
+      <div class="linha"><span>Já pago</span><b>${fmt(t.pago)} BRLS</b></div>
       ${t.etapas > 1 ? `<div class="linha"><span>Etapas pagas</span><b>${t.etapasPagas} de ${t.etapas}</b></div>` : ""}
       <div class="linha"><span>Prazo</span><b>${new Date(t.prazo * 1000).toLocaleString("pt-BR")}</b></div>
       <div class="linha"><span>Cliente</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)} <small class="mudo">${Number(rc.contrapartes)} ${Number(rc.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rc.idadeDias} dias</small></span></div>
@@ -1077,12 +1155,15 @@ TELAS.TRABALHO = async () => {
       ${t.modalidade === 0 ? `<div class="linha"><span>Chegada</span>${t.chegou ? '<span class="selo verde">confirmada com código</span>' : "<b>aguardando</b>"}</div>` : ""}
       ${t.estado === 2 ? `<div class="linha"><span>Pagamento automático em</span><b>${new Date((t.entregueEm + ESCROW.prazoRevisaoDias * 86400) * 1000).toLocaleString("pt-BR")}</b></div>` : ""}
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
-      ${t.caucao > 0n ? `<div class="linha"><span>Caução do entregador</span><b>${fmt(t.caucao)} xBRL ${t.caucaoTravada ? "· travada" : ""}</b></div>` : ""}
+      ${t.kitGas > 0n ? `<div class="linha"><span>⛽ Gás para o trabalhador</span><b>${fmt(t.kitGas, 18, 3)} POL (chega quando o trabalho for confirmado)</b></div>` : ""}
+      ${t.caucao > 0n ? `<div class="linha"><span>Caução do entregador</span><b>${fmt(t.caucao)} BRLS ${t.caucaoTravada ? "· travada" : ""}</b></div>` : ""}
       ${temArbitros ? `<div class="linha"><span>Árbitro do cliente</span><span>${esc(curto(t.arbitroCliente))}</span></div>
         <div class="linha"><span>Árbitro do trabalhador</span><span>${t.arbitroTrabalhador !== z ? esc(curto(t.arbitroTrabalhador)) : "indicado ao aceitar"}</span></div>
         ${t.estado === 3 ? `<div class="linha"><span>Propostas dos árbitros</span><b>${propArb(t.propostaArbCliente)} · ${propArb(t.propostaArbTrabalhador)}</b></div>` : ""}` : ""}
       ${t.desempateCriador ? `<div class="linha"><span>Desempate</span><b>criador da rede (opcional)</b></div>` : ""}
     </div>
+    ${semPol ? `<div class="aviso">⛽ Você está sem POL. Tudo bem: ao tocar numa ação, o app gera um <b>QR</b> para a outra pessoa enviar por você (ela paga a taxa).</div>` : ""}
+    ${S.imp.Encaminhador && !souCliente ? "" : S.imp.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás da outra pessoa</button>` : ""}
     ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small>${esc(enderecoGuardado)}</small></div><button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
     ${souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo">📍 Endereço enviado pela conversa: ${esc(enderecoGuardado)}</p>` : ""}
     ${!souCliente && souParte && (t.modalidade === 0 || t.modalidade === 1) && t.estado === 1 ? `<p class="mudo">📍 O endereço completo chega na 💬 conversa deste trabalho.</p>` : ""}
@@ -1091,7 +1172,7 @@ TELAS.TRABALHO = async () => {
     ${codigo ? `<h2>🔑 Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</h2><p class="mudo">Entregue só a quem recebe, na hora da entrega.</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
     ${devolucao ? `<details class="cartao"><summary><b>↩️ Código de devolução</b> (só se a mercadoria voltar para você)</summary><p class="mudo">Entregue ao entregador <b>somente</b> quando ele devolver a mercadoria em suas mãos. Com ele, você recebe o pagamento de volta e ele recupera a caução.</p>${qrSvg(devolucao)}<div class="codigo">${esc(devolucao)}</div></details>` : ""}
     ${acoes.includes("aceitar") && temArbitros ? `<label for="tr-arb">Seu árbitro para disputas (endereço 0x… de alguém de sua confiança)</label><input id="tr-arb" autocomplete="off" autocapitalize="none" placeholder="0x…">` : ""}
-    ${acoes.includes("aceitar") && t.caucao > 0n ? `<div class="aviso">Ao aceitar, ${fmt(t.caucao)} xBRL da sua carteira ficam travados como caução. Eles voltam quando você usar o código de entrega (ou o de devolução, se trouxer a mercadoria de volta). <b>Nunca entregue nem devolva a mercadoria sem receber o código.</b></div>` : ""}
+    ${acoes.includes("aceitar") && t.caucao > 0n ? `<div class="aviso">Ao aceitar, ${fmt(t.caucao)} BRLS da sua carteira ficam travados como caução. Eles voltam quando você usar o código de entrega (ou o de devolução, se trouxer a mercadoria de volta). <b>Nunca entregue nem devolva a mercadoria sem receber o código.</b></div>` : ""}
     ${acoes.includes("confirmarChegada") ? `<label for="tr-chegada">Cheguei: código de chegada que está no local</label><input id="tr-chegada" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-chegada">📷 Escanear QR</button>${botaoSegurar("confirmar que cheguei", "tr-chegada")}` : ""}
     ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-codigo">📷 Escanear QR</button>${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
     ${acoes.includes("confirmarDevolucao") && !souCliente ? `<details class="cartao"><summary><b>↩️ Devolver a mercadoria</b></summary><p class="mudo">Só devolva na mão do cliente e em troca do código de devolução. Com o código, você recupera a caução.</p><label for="tr-dev">Código de devolução</label><input id="tr-dev" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-devolucao">📷 Escanear QR</button>${botaoSegurar("confirmar a devolução", "tr-devolucao")}</details>` : ""}
@@ -1191,6 +1272,12 @@ async function render() {
   } finally {
     S.ocupado -= 1;
   }
+  // Link de pedido sem gás recebido (WhatsApp): abre assim que a carteira estiver desbloqueada.
+  if (S.pedidoRecebido && S.carteira && ABERTAS.includes(S.tela)) {
+    const txt = S.pedidoRecebido;
+    S.pedidoRecebido = null;
+    abrirPedidoSemGas(txt).catch(mostrarErro);
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -1280,7 +1367,7 @@ async function acao(nome, el) {
       await navigator.clipboard.writeText(S.endereco);
       return toast("Endereço copiado");
     case "compartilhar-end":
-      if (navigator.share) return navigator.share({ title: "Meu endereço xBRL (Polygon)", text: S.endereco });
+      if (navigator.share) return navigator.share({ title: "Meu endereço BRLS (Polygon)", text: S.endereco });
       await navigator.clipboard.writeText(S.endereco);
       return toast("Endereço copiado");
     case "modo-emitir":
@@ -1301,6 +1388,32 @@ async function acao(nome, el) {
       return ir("EXTRATO", { filtro: nome.slice(4) });
     case "ext-atualizar":
       return render();
+    case "beta-resgatar": {
+      const v = S.params.saldoBeta;
+      const rb = new E.Contract(S.beta.ReservaBRL, ABIS.ReservaBRL, S.carteira);
+      let lastro = S.beta.lastros[0];
+      for (const l of S.beta.lastros) {
+        const [pago] = await rb.cotarResgate(l, v).catch(() => [0n]);
+        if (pago > 0n && (await erc20(l).balanceOf(S.beta.ReservaBRL)) >= pago) {
+          lastro = l;
+          break;
+        }
+      }
+      await executar("Resgatar beta", [passoAprovar(S.beta.xBRL, S.beta.ReservaBRL, v, "Autorizar"), { rotulo: "Resgatar", fn: (o) => rb.resgatar(lastro, v, 0, o) }]);
+      return;
+    }
+    case "guia-ok":
+      try { localStorage.setItem("xbrl.guia.ok", "1"); } catch { /* */ }
+      return render();
+    case "semgas-ler":
+      return escanearQR(null, (txt) => abrirPedidoSemGas(txt).catch(mostrarErro));
+    case "semgas-compartilhar":
+      if (navigator.share) return navigator.share({ title: "Pedido sem gás — BRLS", text: "Abra no app BRLS para enviar minha ação (eu estou sem POL):", url: S.pedidoProprio }).catch(() => {});
+      await navigator.clipboard?.writeText(S.pedidoProprio);
+      return toast("Link copiado");
+    case "semgas-pronto":
+      fecharModal();
+      return render();
     case "scan-endereco":
       return escanearQR("#env-para");
     case "scan-devolucao":
@@ -1319,7 +1432,7 @@ async function acao(nome, el) {
       if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
       if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
       const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), `📍 Endereço: ${end}`, txs);
-      await executar("Enviar endereço", [{ rotulo: "Enviar cifrado", fn: (o) => c("Mensageiro", true).enviar(prep.conversa, prep.para, prep.cifrados, prep.registrar, o) }]);
+      if ((await executar("Enviar endereço", [passoMensagem("Enviar cifrado", prep)])) === "semgas") return;
       localStorage.setItem(`xbrl.endereco.enviado.${chave}`, "1");
       return;
     }
@@ -1329,7 +1442,7 @@ async function acao(nome, el) {
       if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
       if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
       const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), $("#chat-txt").value, txs);
-      await executar("Enviar mensagem", [{ rotulo: "Enviar cifrada", fn: (o) => c("Mensageiro", true).enviar(prep.conversa, prep.para, prep.cifrados, prep.registrar, o) }]);
+      if ((await executar("Enviar mensagem", [passoMensagem("Enviar cifrada", prep)])) === "semgas") return;
       fecharModal();
       if (prep.semChave.length) toast(`${prep.semChave.length} participante(s) ainda sem chave: vão ler quando ativarem.`);
       return render();
@@ -1407,7 +1520,7 @@ async function acao(nome, el) {
         const plano = await c("CofreCripto").simularLiquidacao(x.i, l.conta);
         S.params.liquidar = { conta: l.conta, plano };
         modal(`<h2>⚖️ Liquidar ${esc(curto(l.conta))}</h2>
-          <div class="linha"><span>Você paga</span><b>${fmt(plano.pagar)} xBRL</b></div>
+          <div class="linha"><span>Você paga</span><b>${fmt(plano.pagar)} BRLS</b></div>
           <div class="linha"><span>Você recebe</span><b>${fmt(plano.entregar, x.decimais, 6)} ${esc(x.simbolo)}</b></div>
           ${plano.coberto > 0n ? `<div class="linha"><span>Coberto pelo colchão</span><b>${fmt(plano.coberto)}</b></div>` : ""}
           <p class="mudo">O que sobrar da garantia continua com o dono da posição.</p>
@@ -1454,12 +1567,12 @@ async function confirmar(nome) {
         const v = lerValor($("#res-valor").value, t.decimais);
         const [liq] = await c("ReservaBRL").cotarEmissao(t.endereco, v);
         const minimo = (liq * 995n) / 1000n; // tolerância 0,5% (o spread pode mudar se outra pessoa emitir antes)
-        await executar("Comprar xBRL", [passoAprovar(t.endereco, S.imp.ReservaBRL, v, `Autorizar ${t.simbolo}`), { rotulo: "Emitir xBRL", fn: (o) => r.emitir(t.endereco, v, minimo, o) }]);
+        await executar("Comprar BRLS", [passoAprovar(t.endereco, S.imp.ReservaBRL, v, `Autorizar ${t.simbolo}`), { rotulo: "Emitir BRLS", fn: (o) => r.emitir(t.endereco, v, minimo, o) }]);
       } else {
         const v = lerValor($("#res-valor").value, 18);
         const [pago] = await c("ReservaBRL").cotarResgate(t.endereco, v);
         const minimo = (pago * 995n) / 1000n;
-        await executar("Resgatar", [passoAprovar(S.imp.xBRL, S.imp.ReservaBRL, v, "Autorizar xBRL"), { rotulo: `Receber ${t.simbolo}`, fn: (o) => r.resgatar(t.endereco, v, minimo, o) }]);
+        await executar("Resgatar", [passoAprovar(S.imp.xBRL, S.imp.ReservaBRL, v, "Autorizar BRLS"), { rotulo: `Receber ${t.simbolo}`, fn: (o) => r.resgatar(t.endereco, v, minimo, o) }]);
       }
       return;
     }
@@ -1474,6 +1587,9 @@ async function confirmar(nome) {
       }
       return;
     }
+    case "semgas-enviar":
+      await executar("Enviar pela outra pessoa", SG.passosParaEnviar(S.carteira, S.imp, S.params.pedidoSemGas));
+      return;
     case "criar-trabalho":
       return criarTrabalho();
     case "cofre":
@@ -1482,7 +1598,7 @@ async function confirmar(nome) {
       const { x } = S.params.cofre;
       const { conta, plano } = S.params.liquidar;
       const k = c("CofreCripto", true);
-      await executar("Liquidar posição", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, plano.pagar, "Autorizar xBRL"), { rotulo: "Liquidar", fn: (o) => k.liquidar(x.i, conta, o) }]);
+      await executar("Liquidar posição", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, plano.pagar, "Autorizar BRLS"), { rotulo: "Liquidar", fn: (o) => k.liquidar(x.i, conta, o) }]);
       return;
     }
     default:
@@ -1502,14 +1618,14 @@ async function operarCofre() {
   }
   if (modo === "retirar") return executar(`Retirar ${x.simbolo}`, [{ rotulo: "Retirar garantia", fn: (o) => k.retirar(x.i, v, o) }]);
   if (modo === "emitir") {
-    if (v > x.podeEmitir) throw new Error(`O máximo agora é ${fmt(x.podeEmitir)} xBRL`);
-    return executar("Emitir xBRL", [{ rotulo: "Emitir", fn: (o) => k.emitir(x.i, v, o) }]);
+    if (v > x.podeEmitir) throw new Error(`O máximo agora é ${fmt(x.podeEmitir)} BRLS`);
+    return executar("Emitir BRLS", [{ rotulo: "Emitir", fn: (o) => k.emitir(x.i, v, o) }]);
   }
   // quitar: nunca aprova mais do que a dívida
   if (S.params.quitarTudo || v > x.pos.divida) v = x.pos.divida;
   S.params.quitarTudo = false;
-  if (v > saldoX) throw new Error("Saldo de xBRL insuficiente");
-  return executar("Pagar dívida", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, v, "Autorizar xBRL"), { rotulo: "Pagar", fn: (o) => k.quitar(x.i, S.endereco, v, o) }]);
+  if (v > saldoX) throw new Error("Saldo de BRLS insuficiente");
+  return executar("Pagar dívida", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, v, "Autorizar BRLS"), { rotulo: "Pagar", fn: (o) => k.quitar(x.i, S.endereco, v, o) }]);
 }
 
 async function criarTrabalho() {
@@ -1521,7 +1637,7 @@ async function criarTrabalho() {
   const valor = lerValor($("#tn-valor").value, 18);
   if (valor === 0n) throw new Error("Informe o pagamento");
   const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
-  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} xBRL e o pagamento é ${fmt(valor)}. Pegue xBRL na aba Reserva (troque BRZ/BRLA/BRL1) e tente de novo.`);
+  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e o pagamento é ${fmt(valor)}. Pegue BRLS na aba Reserva (troque BRZ/BRLA/BRL1) e tente de novo.`);
   if (saldoPol < E.parseEther("0.05")) throw new Error("Você precisa de um pouco de POL (uns 0,2) para pagar a taxa da rede. Mande POL para o seu endereço na tela Receber.");
   const dias = Math.max(1, Math.min(365, Number($("#tn-prazo").value) || 7));
   const trabTxt = $("#tn-trab").value.trim();
@@ -1539,7 +1655,7 @@ async function criarTrabalho() {
   if (arbTxt && [S.endereco, trabTxt].some((a) => a && a.toLowerCase() === arbTxt.toLowerCase())) throw new Error("O árbitro precisa ser outra pessoa");
   const comCaucao = m === 1 && $("#tn-caucao-on")?.checked;
   const caucao = comCaucao ? lerValor($("#tn-caucao").value, 18) : 0n;
-  if (comCaucao && caucao < E.parseEther(String(ESCROW.caucaoMinima))) throw new Error(`A caução mínima é ${ESCROW.caucaoMinima} xBRL`);
+  if (comCaucao && caucao < E.parseEther(String(ESCROW.caucaoMinima))) throw new Error(`A caução mínima é ${ESCROW.caucaoMinima} BRLS`);
   const devolucao = comCaucao ? gerarCodigoEntrega(palavras) : null;
   const devolucaoHash = devolucao ? hashDevolucao(S.imp.EscrowTrabalho, S.endereco, devolucao) : E.ZeroHash;
   if (devolucao) guardarCodigo(devolucaoHash, devolucao);
@@ -1559,7 +1675,10 @@ async function criarTrabalho() {
   };
   const chaveEnd = m === 0 ? chegadaHash : codigoHash;
   if (enderecoCompleto) try { localStorage.setItem(`xbrl.endereco.${chaveEnd}`, enderecoCompleto); } catch { /* sem armazenamento */ }
-  await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar xBRL"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
+  const kit = S.imp.Encaminhador ? lerValor($("#tn-kit")?.value || "0", 18) : 0n;
+  if (kit > E.parseEther("5")) throw new Error("O gás para o trabalhador pode ser no máximo 5 POL");
+  if (saldoPol < kit + E.parseEther("0.05")) throw new Error(`Você tem ${fmt(saldoPol, 18, 3)} POL: não dá para deixar ${fmt(kit, 18, 3)} de gás para o trabalhador e ainda pagar a taxa. Diminua o valor.`);
+  await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
   if (codigo || chegada) {
     modal(`<h2>✅ Pagamento travado</h2>
       ${chegada ? `<p><b>📍 Código de chegada</b> — deixe no local ou mostre na porta:</p>${qrSvg(chegada)}<div class="codigo" id="cod-chegada">${esc(chegada)}</div>` : ""}
@@ -1585,54 +1704,54 @@ async function acaoTrabalho(nome) {
       }
       const passos = [];
       if (t.caucao > 0n) passos.push(passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, t.caucao, "Autorizar caução"));
-      passos.push({ rotulo: "Aceitar", fn: (o) => k.aceitar(id, arb, o) });
+      passos.push(passoEscrow("Aceitar", "aceitar", [id, arb]));
       return executar("Aceitar trabalho", passos);
     },
-    chegadaPeloCliente: () => executar("Confirmar chegada", [{ rotulo: "Confirmar", fn: (o) => k.confirmarChegadaPeloCliente(id, o) }]),
+    chegadaPeloCliente: () => executar("Confirmar chegada", [passoEscrow("Confirmar", "confirmarChegadaPeloCliente", [id])]),
     devolucao: () => {
       const cod = normalizarCodigo($("#tr-dev").value);
       if (!codigoTemFormatoValido(cod)) throw new Error("O código de devolução tem 5 ou 6 palavras.");
       if (hashDevolucao(S.imp.EscrowTrabalho, t.cliente, cod) !== t.devolucaoHash) throw new Error("Código de devolução incorreto");
-      return executar("Confirmar devolução", [{ rotulo: "Devolução com código", fn: (o) => k.confirmarDevolucao(id, cod, o) }]);
+      return executar("Confirmar devolução", [passoEscrow("Devolução com código", "confirmarDevolucao", [id, cod])]);
     },
     arbitrar: () => {
       const bps = Number($("#tr-arbitrar").value) * 100;
-      return executar("Proposta do árbitro", [{ rotulo: `${bps / 100}% ao trabalhador`, fn: (o) => k.arbitrar(id, bps, o) }]);
+      return executar("Proposta do árbitro", [passoEscrow(`${bps / 100}% ao trabalhador`, "arbitrar", [id, bps])]);
     },
     desempatar: () => {
       const bps = Number($("#tr-desempate").value) * 100;
-      return executar("Desempatar", [{ rotulo: `${bps / 100}% ao trabalhador`, fn: (o) => k.desempatar(id, bps, o) }]);
+      return executar("Desempatar", [passoEscrow(`${bps / 100}% ao trabalhador`, "desempatar", [id, bps])]);
     },
-    cancelar: () => executar("Cancelar", [{ rotulo: "Cancelar", fn: (o) => k.cancelar(id, o) }]),
-    desistir: () => executar("Desistir", [{ rotulo: "Desistir", fn: (o) => k.desistir(id, o) }]),
-    retirarCandidatura: () => executar("Retirar candidatura", [{ rotulo: "Retirar", fn: (o) => k.desistir(id, o) }]),
-    aprovarCandidato: () => executar("Aprovar trabalhador", [{ rotulo: "Aprovar", fn: (o) => k.decidirCandidato(id, true, o) }]),
-    recusarCandidato: () => executar("Recusar candidato", [{ rotulo: "Recusar", fn: (o) => k.decidirCandidato(id, false, o) }]),
-    marcarEntregue: () => executar("Marcar entregue", [{ rotulo: "Marcar entregue", fn: (o) => k.marcarEntregue(id, o) }]),
-    liberar: () => executar("Pagar trabalhador", [{ rotulo: "Liberar", fn: (o) => k.liberar(id, o) }]),
-    reivindicar: () => executar("Receber pagamento", [{ rotulo: "Receber", fn: (o) => k.reivindicar(id, o) }]),
-    abrirDisputa: () => executar("Abrir disputa", [{ rotulo: "Abrir disputa", fn: (o) => k.abrirDisputa(id, o) }]),
-    reembolsarPorPrazo: () => executar("Reaver valor", [{ rotulo: "Reembolso", fn: (o) => k.reembolsarPorPrazo(id, o) }]),
-    resolverPorTempo: () => executar("Dividir 50/50", [{ rotulo: "Resolver", fn: (o) => k.resolverPorTempo(id, o) }]),
+    cancelar: () => executar("Cancelar", [passoEscrow("Cancelar", "cancelar", [id])]),
+    desistir: () => executar("Desistir", [passoEscrow("Desistir", "desistir", [id])]),
+    retirarCandidatura: () => executar("Retirar candidatura", [passoEscrow("Retirar", "desistir", [id])]),
+    aprovarCandidato: () => executar("Aprovar trabalhador", [passoEscrow("Aprovar", "decidirCandidato", [id, true])]),
+    recusarCandidato: () => executar("Recusar candidato", [passoEscrow("Recusar", "decidirCandidato", [id, false])]),
+    marcarEntregue: () => executar("Marcar entregue", [passoEscrow("Marcar entregue", "marcarEntregue", [id])]),
+    liberar: () => executar("Pagar trabalhador", [passoEscrow("Liberar", "liberar", [id])]),
+    reivindicar: () => executar("Receber pagamento", [passoEscrow("Receber", "reivindicar", [id])]),
+    abrirDisputa: () => executar("Abrir disputa", [passoEscrow("Abrir disputa", "abrirDisputa", [id])]),
+    reembolsarPorPrazo: () => executar("Reaver valor", [passoEscrow("Reembolso", "reembolsarPorPrazo", [id])]),
+    resolverPorTempo: () => executar("Dividir 50/50", [passoEscrow("Resolver", "resolverPorTempo", [id])]),
     acordo: () => {
       const bps = Number($("#tr-acordo").value) * 100;
-      return executar("Propor acordo", [{ rotulo: `Propor ${bps / 100}% ao trabalhador`, fn: (o) => k.proporAcordo(id, bps, o) }]);
+      return executar("Propor acordo", [passoEscrow(`Propor ${bps / 100}% ao trabalhador`, "proporAcordo", [id, bps])]);
     },
     avaliar: () => {
       if (!S.params.estrelas) throw new Error("Escolha de 1 a 5 estrelas");
-      return executar("Avaliar", [{ rotulo: `${S.params.estrelas} estrelas`, fn: (o) => k.avaliar(id, S.params.estrelas, o) }]);
+      return executar("Avaliar", [passoEscrow(`${S.params.estrelas} estrelas`, "avaliar", [id, S.params.estrelas])]);
     },
     codigo: () => {
       const cod = normalizarCodigo($("#tr-cod").value);
       if (!codigoTemFormatoValido(cod)) throw new Error("O código tem 5 ou 6 palavras. Confira com quem recebe.");
       if (hashCodigo(S.imp.EscrowTrabalho, t.cliente, cod) !== t.codigoHash) throw new Error("Código incorreto");
-      return executar("Confirmar com código", [{ rotulo: "Liberar com código", fn: (o) => k.confirmarComCodigo(id, cod, o) }]);
+      return executar("Confirmar com código", [passoEscrow("Liberar com código", "confirmarComCodigo", [id, cod])]);
     },
     chegada: () => {
       const cod = normalizarCodigo($("#tr-chegada").value);
       if (!codigoTemFormatoValido(cod)) throw new Error("O código de chegada tem 5 ou 6 palavras. Confira no local.");
       if (hashChegada(S.imp.EscrowTrabalho, t.cliente, cod) !== t.chegadaHash) throw new Error("Código de chegada incorreto");
-      return executar("Confirmar chegada", [{ rotulo: "Registrar que cheguei", fn: (o) => k.confirmarChegada(id, cod, o) }]);
+      return executar("Confirmar chegada", [passoEscrow("Registrar que cheguei", "confirmarChegada", [id, cod])]);
     },
   }[nome];
   if (!f) return;
@@ -1645,6 +1764,7 @@ async function acaoTrabalho(nome) {
 // ----------------------------------------------------------------------------
 async function iniciar() {
   S.tela = "CARREGANDO";
+  $("#marca").innerHTML = marca(32);
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
     let recarregou = false;
@@ -1653,6 +1773,11 @@ async function iniciar() {
       recarregou = true;
       if (!S.carteira) location.reload(); // nova versão: atualiza já (se a carteira estiver aberta, no próximo bloqueio)
     });
+  }
+  window.addEventListener("hashchange", receberPedidoDoLink);
+  if (location.hash.startsWith("#" + SG.PREFIXO)) {
+    S.pedidoRecebido = location.hash.slice(1);
+    history.replaceState(null, "", location.pathname + location.search);
   }
   await conectarRede(escolherRedeInicial());
   ir(K.existeCofre() ? "BLOQUEADA" : "BOAS_VINDAS");

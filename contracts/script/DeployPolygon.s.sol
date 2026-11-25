@@ -9,6 +9,7 @@ import {ReservaBRL} from "../src/ReservaBRL.sol";
 import {EscrowTrabalho} from "../src/EscrowTrabalho.sol";
 import {CofreCripto} from "../src/CofreCripto.sol";
 import {Mensageiro} from "../src/Mensageiro.sol";
+import {Encaminhador} from "../src/Encaminhador.sol";
 
 /// @notice Stablecoin de Real SÓ PARA TESTNET (Amoy/local), com torneira pública.
 contract BRLTeste is ERC20 {
@@ -86,7 +87,7 @@ interface IFabricaV3 {
 /// O dono da Reserva é o CREATOR_TREASURY desde o construtor: a chave de deploy é descartável.
 contract DeployPolygon is Script {
     address public constant CREATOR_TREASURY = 0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1;
-    bytes32 public constant SALT = keccak256("xBRL.soberano.beta2");
+    bytes32 public constant SALT = keccak256("xBRL.soberano.v1");
 
     // Polygon PoS (137) — stablecoins de Real (lastro 1:1, lista imutável)
     address public constant BRZ = 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc;
@@ -104,8 +105,10 @@ contract DeployPolygon is Script {
     address public constant FEED_BRL_USD = 0xB90DA3ff54C3ED09115abf6FbA0Ff4645586af2c;
 
     uint256 public constant POLYGON = 137;
-    uint256 public constant TETO_RESERVA_BETA = 1_000e18;
-    uint128 public constant TETO_DIVIDA_BETA = 500e18;
+    /// @notice Produção (decisão do dono, 25/11/2026): sem teto na reserva (o teto diário por lastro continua)
+    /// e sem teto de dívida no cofre cripto (valor máximo = sem limite prático).
+    uint256 public constant TETO_RESERVA = 0;
+    uint128 public constant TETO_DIVIDA_POR_ATIVO = type(uint128).max;
 
     struct Implantacao {
         address token;
@@ -113,6 +116,7 @@ contract DeployPolygon is Script {
         address escrow;
         address cofre;
         address mensageiro;
+        address encaminhador;
         address[] lastros;
         address[] criptos;
         address deployer;
@@ -123,7 +127,7 @@ contract DeployPolygon is Script {
 
     function run() external returns (Implantacao memory imp) {
         imp.blocoInicial = block.number;
-        imp.beta = true;
+        imp.beta = false;
         if (block.chainid == POLYGON) _conferirPolygon();
         vm.startBroadcast();
         (, imp.deployer,) = vm.readCallers();
@@ -139,13 +143,14 @@ contract DeployPolygon is Script {
         imp.lastros = _lastros();
         imp.reserva = _criar(
             type(ReservaBRL).creationCode,
-            abi.encode(
-                imp.token, CREATOR_TREASURY, imp.cofre, imp.lastros, CREATOR_TREASURY, TETO_RESERVA_BETA
-            )
+            abi.encode(imp.token, CREATOR_TREASURY, imp.cofre, imp.lastros, CREATOR_TREASURY, TETO_RESERVA)
         );
-        imp.escrow =
-            _criar(type(EscrowTrabalho).creationCode, abi.encode(imp.token, CREATOR_TREASURY, imp.cofre));
-        imp.mensageiro = _criar(type(Mensageiro).creationCode, "");
+        imp.encaminhador = _criar(type(Encaminhador).creationCode, "");
+        imp.escrow = _criar(
+            type(EscrowTrabalho).creationCode,
+            abi.encode(imp.token, CREATOR_TREASURY, imp.cofre, imp.encaminhador)
+        );
+        imp.mensageiro = _criar(type(Mensageiro).creationCode, abi.encode(imp.encaminhador));
 
         if (!xBRL(imp.token).inicializado()) xBRL(imp.token).inicializar(imp.reserva, imp.cofre);
         vm.stopBroadcast();
@@ -202,7 +207,7 @@ contract DeployPolygon is Script {
         c.decimaisPar = 6;
         c.crEmissaoBps = crEmissao;
         c.crLiquidacaoBps = crLiquidacao;
-        c.tetoDivida = TETO_DIVIDA_BETA;
+        c.tetoDivida = TETO_DIVIDA_POR_ATIVO;
     }
 
     /// @dev Pool Uniswap V3 ativo/USDC (nativo ou USDC.e, taxa 0,05% ou 0,3%) com mais saldo do ativo.
@@ -299,6 +304,10 @@ contract DeployPolygon is Script {
         require(EscrowTrabalho(imp.escrow).COLCHAO() == imp.cofre, "colchao do escrow divergente");
         require(address(CofreCripto(imp.cofre).XBRL()) == imp.token, "cofre com token errado");
         require(address(EscrowTrabalho(imp.escrow).XBRL()) == imp.token, "escrow com token errado");
+        require(EscrowTrabalho(imp.escrow).isTrustedForwarder(imp.encaminhador), "escrow sem encaminhador");
+        require(
+            Mensageiro(imp.mensageiro).isTrustedForwarder(imp.encaminhador), "mensageiro sem encaminhador"
+        );
         // O cofre precisa nascer com preço utilizável para emitir (Chainlink + TWAP quando houver pool).
         for (uint256 i = 0; i < CofreCripto(imp.cofre).totalAtivos(); ++i) {
             (uint256 preco, bool ok) = CofreCripto(imp.cofre).precoParaEmitir(i);
@@ -314,6 +323,7 @@ contract DeployPolygon is Script {
         console2.log("EscrowTrabalho", imp.escrow);
         console2.log("CofreCripto", imp.cofre);
         console2.log("Mensageiro", imp.mensageiro);
+        console2.log("Encaminhador", imp.encaminhador);
         if (!vm.envOr("XBRL_GRAVAR_JSON", true)) return;
 
         string memory k = "implantacao";
@@ -327,6 +337,7 @@ contract DeployPolygon is Script {
         vm.serializeAddress(k, "EscrowTrabalho", imp.escrow);
         vm.serializeAddress(k, "CofreCripto", imp.cofre);
         vm.serializeAddress(k, "Mensageiro", imp.mensageiro);
+        vm.serializeAddress(k, "Encaminhador", imp.encaminhador);
         vm.serializeAddress(k, "criptos", imp.criptos);
         vm.serializeBytes(k, "argsCofre", imp.argsCofre);
         string memory json = vm.serializeAddress(k, "lastros", imp.lastros);

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0A2118">
+  <meta name="color-scheme" content="dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:8545 http://localhost:8545; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Comprovante — BRLS</title>
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+  <header class="cab"><a id="marca" href="./" aria-label="Abrir a carteira BRLS"></a></header>
+  <main id="tela" aria-live="polite">
+    <div class="recibo"><div class="giro"></div><p class="status">Lendo a transação na blockchain…</p></div>
+  </main>
+  <script src="src/vendor/ethers.umd.min.js"></script>
+  <script type="module" src="src/comprovante.js"></script>
+</body>
+</html>

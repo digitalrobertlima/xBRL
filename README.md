@@ -1,17 +1,16 @@
-# xBRL — O Real Soberano & Inconfiscável (Polygon)
+# BRLS — Real Soberano (Polygon)
 
-**1 xBRL = R$ 1**, lastreado em stablecoins de Real (BRZ, BRLA, BRL1) ou em cripto supercolateralizada (ETH, POL), sem congelamento, sem confisco, sem servidor.
-
-🧪 **Fase beta na Polygon** com limites baixos (reserva até R$ 1.000, cofre até R$ 500 por cripto).
+**1 BRLS = R$ 1**, lastreado em stablecoins de Real (BRZ, BRLA, BRL1) ou em cripto supercolateralizada (ETH, POL). Sem congelamento, sem confisco, sem servidor. Com marketplace de trabalho: o pagamento fica travado em contrato até o serviço ser cumprido.
 
 - 🌐 Site: https://digitalrobertlima.github.io/xBRL
-- 👛 Carteira PWA: https://digitalrobertlima.github.io/xBRL/wallet/
+- 👛 Carteira: https://digitalrobertlima.github.io/xBRL/wallet/
+- 🏊 Guia da pool na Uniswap: https://digitalrobertlima.github.io/xBRL/guia-pool.html
 
-| Pasta | O que tem |
+| Pasta / arquivo | O que tem |
 |---|---|
-| `contracts/` | Foundry: `xBRL`, `ReservaBRL`, `CofreCripto`, `EscrowTrabalho`, `Mensageiro`, script de deploy determinístico e 68 testes |
-| `wallet/` | Carteira nativa 100% estática (BIP-39 + AES-256-GCM + WebAuthn PRF, tanque de gás, cofre cripto, marketplace com códigos/QR de chegada, entrega e devolução, caução, árbitros e conversa cifrada) |
-| `index.html` | Landing page institucional |
+| `contracts/` | Foundry: `xBRL` (token BRLS), `ReservaBRL`, `CofreCripto`, `EscrowTrabalho`, `Mensageiro`, `Encaminhador` (ações sem gás, ERC-2771), deploy determinístico e 75 testes |
+| `wallet/` | Carteira 100% estática: BIP-39 + AES-256-GCM + biometria, tanque e kit de gás, ações sem gás por QR/link, cofre cripto, trabalhos com códigos/QR, caução, árbitros, conversa cifrada, extrato e comprovante em português |
+| `index.html`, `site.*`, `guia-pool.*` | Página pública e guia da pool |
 | `CLAUDE.md` | Manual técnico fixo: invariantes, endereços, identidade visual, comandos |
 
 ```bash

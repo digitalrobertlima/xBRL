@@ -3,235 +3,121 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#03231A">
+  <meta name="theme-color" content="#0A2118">
   <meta name="color-scheme" content="dark">
-  <title>xBRL — O Real Soberano & Inconfiscável na Polygon</title>
-  <meta name="description" content="xBRL é um Real digital 1:1, lastreado em stablecoins de Real, sem congelamento nem confisco. Carteira própria e marketplace de trabalho sem intermediário.">
-  <meta property="og:title" content="xBRL — O Real Soberano & Inconfiscável">
-  <meta property="og:description" content="1 xBRL = R$ 1. Lastro 100% verificável na Polygon. Ninguém congela, ninguém confisca.">
+  <title>BRLS — Real Soberano: o real que é só seu</title>
+  <meta name="description" content="BRLS é um real digital 1:1 na Polygon. Guarde, pague, contrate e receba por trabalho sem banco no meio. Ninguém congela, ninguém confisca.">
+  <meta property="og:title" content="BRLS — Real Soberano">
+  <meta property="og:description" content="1 BRLS = R$ 1. Lastro verificável na Polygon. Trabalho com pagamento garantido por contrato.">
   <meta property="og:image" content="wallet/icons/icon-512.png">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="wallet/icons/icon-192.png" type="image/png">
-  <style>
-    :root {
-      --e950: #021912; --e900: #03231A; --e800: #063B2C; --e700: #0A5A43; --e500: #10B981; --e300: #6EE7B7; --e100: #D1FAE5;
-      --o600: #B8901F; --o500: #D4AF37; --o400: #E9C46A; --o300: #F5D98B;
-      --txt: #ECFDF5; --mudo: #9CC7B6; --aviso: #FBBF24;
-      --fonte: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
-    body { margin: 0; font-family: var(--fonte); color: var(--txt); line-height: 1.55; font-size: 17px;
-      background: radial-gradient(1400px 700px at 70% -250px, #0E5A43 0%, var(--e900) 50%, var(--e950) 100%) fixed; }
-    a { color: var(--o400); }
-    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
-    header { position: sticky; top: 0; z-index: 10; background: rgba(3,35,26,.82); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(212,175,55,.18); }
-    header .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
-    .marca { display: flex; align-items: center; gap: 10px; font-weight: 900; font-size: 21px; text-decoration: none; color: var(--txt); }
-    .marca img { width: 34px; height: 34px; border-radius: 9px; }
-    .marca b { color: var(--o400); }
-    nav { margin-left: auto; display: flex; gap: 18px; font-size: 15px; }
-    nav a { color: var(--mudo); text-decoration: none; }
-    nav a:hover { color: var(--o300); }
-    .cta { display: inline-block; padding: 14px 22px; border-radius: 14px; font-weight: 800; text-decoration: none; }
-    .cta.ouro { background: linear-gradient(180deg, var(--o400), var(--o500)); color: var(--e900); box-shadow: 0 8px 24px rgba(212,175,55,.3); }
-    .cta.linha { border: 1px solid rgba(110,231,183,.4); color: var(--e100); }
-    header .cta { padding: 9px 14px; font-size: 15px; }
-    .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; padding: 72px 0 56px; }
-    .hero h1 { font-size: clamp(38px, 5.6vw, 64px); line-height: 1.04; margin: 0 0 18px; letter-spacing: -1px; }
-    .hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--o300), var(--o500)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .hero p.lead { font-size: 20px; color: var(--e100); max-width: 560px; }
-    .acoes { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
-    .moeda { aspect-ratio: 1; max-width: 360px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center;
-      background: conic-gradient(from 200deg, var(--o300), var(--o500), var(--o600), var(--o400), var(--o300));
-      box-shadow: 0 30px 80px rgba(212,175,55,.25), inset 0 0 0 14px rgba(3,35,26,.18); color: var(--e900); text-align: center; }
-    .moeda strong { display: block; font-size: clamp(60px, 8vw, 104px); font-weight: 900; line-height: .9; }
-    .moeda span { font-weight: 800; letter-spacing: 5px; }
-    .faixa { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 10px 0 40px; }
-    .faixa div { background: rgba(10,90,67,.35); border: 1px solid rgba(110,231,183,.16); border-radius: 16px; padding: 16px; }
-    .faixa b { display: block; font-size: 24px; color: var(--o300); }
-    section { padding: 56px 0; border-top: 1px solid rgba(110,231,183,.08); }
-    h2 { font-size: clamp(28px, 3.6vw, 40px); margin: 0 0 10px; letter-spacing: -.5px; }
-    .sub { color: var(--mudo); max-width: 720px; margin: 0 0 28px; }
-    .grade { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-    .grade.duas { grid-template-columns: repeat(2, 1fr); }
-    .grade.quatro { grid-template-columns: repeat(4, 1fr); }
-    .card { background: linear-gradient(180deg, rgba(10,90,67,.5), rgba(6,59,44,.5)); border: 1px solid rgba(110,231,183,.16); border-radius: 20px; padding: 22px; }
-    .card.ouro { border-color: rgba(212,175,55,.45); background: linear-gradient(160deg, rgba(212,175,55,.14), rgba(6,59,44,.6) 60%); }
-    .card .ic { font-size: 34px; }
-    .card h3 { margin: 8px 0 6px; font-size: 20px; }
-    .card p, .card li { color: var(--e100); font-size: 16px; }
-    .card ul { padding-left: 18px; margin: 8px 0 0; }
-    .selo { display: inline-block; font-size: 12px; font-weight: 800; padding: 3px 9px; border-radius: 99px; background: rgba(212,175,55,.16); color: var(--o300); border: 1px solid rgba(212,175,55,.35); }
-    .fases { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .passos { counter-reset: n; list-style: none; padding: 0; display: grid; gap: 12px; }
-    .passos li { counter-increment: n; display: flex; gap: 14px; align-items: flex-start; }
-    .passos li::before { content: counter(n); flex: 0 0 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; background: var(--o500); color: var(--e900); }
-    table { width: 100%; border-collapse: collapse; font-size: 15px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(110,231,183,.12); vertical-align: top; }
-    th { color: var(--mudo); font-weight: 600; }
-    td code, .mono { font-family: var(--mono); font-size: 13.5px; word-break: break-all; }
-    details { background: rgba(10,90,67,.3); border: 1px solid rgba(110,231,183,.14); border-radius: 14px; padding: 14px 18px; margin: 10px 0; }
-    summary { cursor: pointer; font-weight: 700; }
-    .aviso { border-left: 4px solid var(--aviso); background: rgba(251,191,36,.08); padding: 14px 16px; border-radius: 12px; color: var(--e100); }
-    footer { padding: 40px 0 60px; color: var(--mudo); font-size: 14px; border-top: 1px solid rgba(212,175,55,.15); }
-    @media (max-width: 880px) {
-      .hero, .fases, .grade, .grade.duas, .grade.quatro, .faixa { grid-template-columns: 1fr; }
-      nav { display: none; }
-      .hero { padding-top: 40px; }
-      .moeda { max-width: 240px; }
-    }
-  </style>
+  <link rel="stylesheet" href="wallet/estilo.css">
+  <link rel="stylesheet" href="site.css">
 </head>
-<body>
-<header>
-  <div class="wrap">
-    <a class="marca" href="#"><img src="wallet/icons/icon-192.png" alt=""><span>x<b>BRL</b></span></a>
-    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#cofre">Cofre cripto</a><a href="#uniswap">Uniswap</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
-    <a class="cta ouro" href="wallet/">Abrir carteira</a>
-  </div>
+<body class="site">
+<header class="cab">
+  <a id="marca" class="marca-link" href="#topo" aria-label="BRLS, início da página"></a>
+  <nav aria-label="Seções"><a href="#comecar">Começar</a><a href="#trabalho">Trabalho</a><a href="#lastro">Lastro</a><a href="#seguranca">Segurança</a><a href="#faq">Dúvidas</a></nav>
+  <a class="btn prim pequeno" href="wallet/">Abrir a carteira</a>
 </header>
 
-<main class="wrap">
-  <div class="hero">
-    <div>
-      <span class="selo">Polygon PoS · código aberto · beta</span>
-      <h1>O Real <em>soberano</em> e inconfiscável.</h1>
-      <p class="lead">1 xBRL = R$ 1, lastreado em stablecoins de Real ou em cripto supercolateralizada, verificável a qualquer momento na blockchain. Sem banco no meio, sem congelamento, sem confisco: a chave fica no seu celular.</p>
-      <div class="acoes">
-        <a class="cta ouro" href="wallet/">Criar minha carteira grátis</a>
-        <a class="cta linha" href="#como">Entender em 2 minutos</a>
-      </div>
+<main id="topo">
+  <section class="capa">
+    <div class="capa-texto">
+      <h1>O real que é só seu.</h1>
+      <p class="lead">Cada BRLS vale R$ 1. Você guarda, paga, contrata e recebe por trabalho direto do celular, sem banco no meio. Nenhuma pessoa, empresa ou governo consegue congelar o seu saldo.</p>
+      <a class="btn prim" href="wallet/">Criar minha carteira grátis</a>
+      <a class="btn sec" href="wallet/">Ver vagas de trabalho abertas</a>
     </div>
-    <div class="moeda" aria-hidden="true"><div><span>xBRL</span><strong>R$</strong><span>1 = 1</span></div></div>
-  </div>
-
-  <div class="faixa">
-    <div><b>≥100%</b>de lastro: stablecoins de Real ou 200%+ em ETH/POL, auditável on-chain</div>
-    <div><b>0</b>botões de congelar, pausar ou confiscar saldo</div>
-    <div><b>R$ 0</b>de taxa para transferir: xBRL é um token padrão, negociável na Uniswap</div>
-    <div><b>0</b>servidores: carteira roda inteira no seu aparelho</div>
-  </div>
-
-  <p class="aviso"><b>🧪 Fase beta na rede real.</b> Os contratos estão na Polygon com limites baixos de propósito (reserva até R$ 1.000 e cofre cripto até R$ 500 por moeda) para testes com dinheiro de verdade, mas em valores pequenos. Ainda não há auditoria externa.</p>
-
-  <section id="como">
-    <h2>Como funciona</h2>
-    <p class="sub">Três contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
-    <div class="grade">
-      <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade, sem taxa na transferência. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
-      <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega stablecoin de Real (BRZ, BRLA, BRL1) e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
-      <div class="card"><div class="ic">🏦</div><h3>Cofre cripto</h3><p>Deposite ETH ou POL como garantia (200%+) e emita xBRL sem vender sua cripto. Sem juros. Pagou a dívida, retira a garantia.</p></div>
-      <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. Códigos de chegada e de entrega (palavras + QR) e reputação pública.</p></div>
-    </div>
+    <div class="capa-roseta" id="roseta-capa" aria-hidden="true"></div>
   </section>
 
-  <section id="reserva">
-    <h2>Lastro de verdade, com proteções automáticas</h2>
-    <p class="sub">Cada xBRL nasce de 1 real em stablecoin depositado na Reserva. Nenhuma regra abaixo depende de alguém apertar um botão — e nenhuma permite tirar o lastro de lá.</p>
-    <div class="grade duas">
-      <div class="card ouro"><h3>🔒 Lista de lastros fixa</h3><p>BRZ, BRLA e BRL1 foram gravados na criação do contrato. Ninguém — nem o criador — consegue incluir outro token. Não existe "lastro falso".</p></div>
-      <div class="card"><h3>⚖️ Lastro a mais</h3><p>Quem traz o lastro que já sobra na reserva paga até 0,40% extra, que fica guardado como lastro adicional. A reserva tende a ter mais de 100%.</p></div>
-      <div class="card"><h3>🚧 Teto diário por lastro</h3><p>No máximo 10% da reserva (mínimo 50 mil) entra por cada lastro a cada 24 h. Se um lastro perder a paridade, ninguém consegue trocá-lo pelo bom de uma vez.</p></div>
-      <div class="card"><h3>🏃 Sem corrida bancária</h3><p>Acima de 1 milhão em circulação, até 20% do total pode ser resgatado por dia. O resgate nunca pode ser pausado.</p></div>
-    </div>
-    <p class="aviso" style="margin-top:18px">Seja honesto com você: as stablecoins de Real são emitidas por empresas que podem congelar endereços. O xBRL em si é inconfiscável, mas essa parte do lastro depende desses emissores. Por isso existe o cofre cripto: lastro em ETH e POL, que ninguém congela.</p>
+  <section class="numeros" aria-label="O BRLS em números">
+    <p><b>R$ 1</b>vale cada BRLS, com lastro conferível por qualquer pessoa</p>
+    <p><b>0</b>botões de congelar, pausar ou tomar saldo</p>
+    <p><b>R$ 0</b>de taxa para enviar BRLS a alguém</p>
+    <p><b>0</b>servidores: a carteira roda inteira no seu aparelho</p>
   </section>
 
-  <section id="cofre">
-    <h2>Cofre cripto: lastro que ninguém congela</h2>
-    <p class="sub">O contrato não negocia, não empresta e não aplica a sua garantia. Ela fica parada, sua, até você pagar a dívida em xBRL (que é queimado) e retirar.</p>
-    <div class="grid">
-      <div class="card ouro"><h3>📏 Garantia de sobra</h3><p>ETH: emite até 50% do valor (200% de garantia), liquidação abaixo de 150%. POL, mais volátil: 250% e 175%.</p></div>
-      <div class="card"><h3>🔭 Preço conferido duas vezes</h3><p>Chainlink conferido com a média de 30 min da Uniswap. Se divergirem mais de 5% ou pararem, emitir e liquidar travam. Pagar dívida e depositar nunca travam.</p></div>
-      <div class="card"><h3>📉 Testado no tombo</h3><p>ETH −40% num dia: liquidação paga a dívida inteira e a sobra volta ao dono. ETH −57%: o colchão cobre a diferença. Tudo coberto por testes automáticos.</p></div>
-      <div class="card"><h3>🛟 Colchão de proteção</h3><p>Metade de toda taxa do protocolo (emissão, resgate, trabalhos, cofre) vai para um colchão em xBRL que absorve prejuízo de liquidação. A outra metade vai ao criador.</p></div>
-    </div>
-  </section>
-
-  <section id="uniswap">
-    <h2>Negociável em qualquer lugar</h2>
-    <p class="sub">Sem taxa na transferência, o xBRL é um token ERC-20 padrão: entra em pools da Uniswap, carteiras e outros protocolos. Como a Reserva emite e resgata a R$ 1 (±0,1%), qualquer desvio de preço nas pools vira oportunidade de arbitragem que puxa o preço de volta para R$ 1.</p>
+  <section id="comecar">
+    <h2>Comece em quatro passos</h2>
+    <ol class="passos grande">
+      <li><b>Crie a carteira</b><p>Abra o site no celular e toque em “Criar minha carteira”. Anote as 12 palavras num papel: elas são a chave do seu dinheiro.</p></li>
+      <li><b>Pegue um pouco de POL</b><p>É a moeda que paga a taxa da rede, centavos por operação. Se alguém te contratar, ele já manda o gás junto com o trabalho.</p></li>
+      <li><b>Tenha BRLS</b><p>Receba por um trabalho, peça para alguém te enviar, ou troque BRZ, BRLA ou BRL1 por BRLS na Reserva, de 1 para 1.</p></li>
+      <li><b>Trabalhe ou contrate</b><p>Veja as vagas abertas ou crie a sua. O pagamento fica travado no contrato até o serviço ser cumprido: seguro para os dois lados.</p></li>
+    </ol>
   </section>
 
   <section id="trabalho">
-    <h2>Marketplace de trabalho, sem intermediário</h2>
-    <p class="sub">O cliente trava o pagamento no contrato. O trabalhador recebe quando a regra da modalidade é cumprida. Taxa de 0,1% só no pagamento.</p>
-    <div class="grade quatro">
-      <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>O trabalhador prova que chegou com o código/QR que fica no local — como no app de entrega do mercado. Nada de GPS falsificável.</p></div>
-      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>Código secreto de palavras (e QR) que só o destinatário tem. Sem código, sem entrega; código certo = pagamento na hora. O entregador pode deixar caução (mín. 200 xBRL) que volta com o código de entrega ou de devolução.</p></div>
-      <div class="card"><div class="ic">💻</div><h3>Remoto</h3><p>Trabalhador marca entregue; cliente aprova ou, depois de 3 dias de silêncio, o valor é liberado.</p></div>
-      <div class="card"><div class="ic">🧱</div><h3>Por etapas</h3><p>De 2 a 50 parcelas iguais, cada uma com a mesma regra do remoto.</p></div>
+    <h2>Trabalho com pagamento garantido</h2>
+    <p class="sub">Quem contrata trava o pagamento no contrato antes de começar. Quem trabalha sabe que o dinheiro existe e recebe quando a regra é cumprida. Taxa de 0,1% só quando o pagamento sai.</p>
+    <div class="modos">
+      <article><span class="ic">🧹</span><h3>Presencial</h3><p>Faxina, conserto, aula. O trabalhador prova que chegou com o código que fica no local (palavras ou QR). Endereço completo só para quem foi aceito.</p></article>
+      <article><span class="ic">🛵</span><h3>Entrega</h3><p>Só o código de quem recebe libera o pagamento. Sem código, sem entrega. Para mercadoria de valor, o entregador deixa uma caução que volta com o código.</p></article>
+      <article><span class="ic">💻</span><h3>Remoto</h3><p>Arte, texto, site. O trabalhador marca como entregue; o cliente aprova ou, depois de 3 dias sem resposta, o valor é liberado.</p></article>
+      <article><span class="ic">🧱</span><h3>Por etapas</h3><p>Projetos maiores, de 2 a 50 parcelas iguais. Cada parcela segue a regra do remoto.</p></article>
     </div>
-    <div class="grade duas" style="margin-top:16px">
-      <div class="card"><h3>⚖️ Disputa com árbitros que você escolhe</h3><p>Cada lado propõe uma divisão; propostas iguais resolvem na hora. Opcional: cada parte indica um árbitro de confiança e, se os dois concordarem, está resolvido. Se quiser, o criador da rede desempata (só entre as propostas dos árbitros). Sem acordo em 30 dias, vale a média dos árbitros ou 50/50.</p></div>
-      <div class="card"><h3>💬 Conversa cifrada</h3><p>Cliente, trabalhador e árbitros conversam dentro do trabalho, com criptografia de ponta a ponta. Fica registrado para sempre, mas só eles conseguem ler.</p></div>
-      <div class="card"><h3>⭐ Reputação que não se compra</h3><p>O nível (0 a 5) exige pessoas diferentes, avaliadores diferentes, volume e tempo real de conta. Repetir trabalhos falsos entre as mesmas contas não sobe ninguém de nível.</p></div>
+    <div class="destaques">
+      <article><h3>⛽ Ninguém trava por falta de gás</h3><p>Quem contrata deixa uns centavos de POL junto com o pagamento, e eles chegam ao trabalhador quando ele é aceito. Se mesmo assim faltar, a ação vira um QR: a outra pessoa lê e envia por ele.</p></article>
+      <article><h3>💬 Conversa dentro do trabalho</h3><p>Cliente, trabalhador e árbitros conversam com criptografia de ponta a ponta. Fica registrado, mas só eles conseguem ler.</p></article>
+      <article><h3>⚖️ Árbitros que você escolhe</h3><p>Em caso de desacordo, cada parte indica uma pessoa de confiança. Se os dois árbitros concordarem, está resolvido na hora. Sem acordo em 30 dias, vale a média deles.</p></article>
+      <article><h3>⭐ Reputação que não se compra</h3><p>O nível exige clientes diferentes, avaliações de pessoas diferentes, volume e tempo de conta. Contas falsas trocando trabalho entre si não sobem de nível.</p></article>
+      <article><h3>🧾 Comprovante em português</h3><p>Cada operação tem um comprovante público que explica quem pagou quem, quanto e por quê. Dá para compartilhar no WhatsApp.</p></article>
     </div>
   </section>
 
-  <section id="carteira">
-    <h2>A carteira nativa</h2>
-    <p class="sub">Um app instalável (PWA) para Android e iPhone, que funciona sem cadastro e sem servidor.</p>
-    <ol class="passos">
-      <li><div><b>12 palavras são a sua conta.</b> Geradas no aparelho (padrão BIP-39) e cifradas com AES-256-GCM. A carteira oferece biometria com a chave guardada no chip de segurança do celular.</div></li>
-      <li><div><b>Tanque de gás transparente.</b> Guarda até 3,0 POL para as taxas da rede e reabastece trocando seus tokens na Uniswap, com perda máxima de 1% de preço.</div></li>
-      <li><div><b>Telas travadas.</b> Dinheiro só se move segurando o botão de confirmar; a carteira bloqueia sozinha em 5 minutos.</div></li>
-    </ol>
-    <a class="cta ouro" href="wallet/" style="margin-top:14px">Abrir a carteira</a>
+  <section id="lastro">
+    <h2>Por que 1 BRLS vale R$ 1</h2>
+    <p class="sub">O BRLS só nasce de duas formas, e as duas ficam abertas para qualquer pessoa conferir na blockchain.</p>
+    <div class="dupla">
+      <article class="cartao"><h3>🏛️ Reserva</h3><p>Você deposita stablecoin de Real (BRZ, BRLA ou BRL1) e recebe BRLS na mesma quantidade. Devolve BRLS e recebe a stablecoin de volta, quando quiser. O resgate nunca pode ser pausado.</p>
+        <ul><li>Lista de lastros gravada na criação: ninguém adiciona um lastro falso.</li><li>Limite diário por lastro: se um deles perder o valor, não drena os outros.</li><li>Quem traz o lastro que já sobra paga até 0,40% a mais, que fica guardado como lastro extra.</li></ul></article>
+      <article class="cartao"><h3>🏦 Cofre cripto</h3><p>Você deposita ETH ou POL como garantia e emite BRLS sem vender a sua cripto. Sem juros. A garantia fica parada e é sua; pagou a dívida, retira.</p>
+        <ul><li>Garantia mínima de 200% (ETH) ou 250% (POL).</li><li>Preço conferido em duas fontes (Chainlink e Uniswap). Se elas discordarem, emitir trava.</li><li>Se a cripto despencar, a posição é liquidada antes de faltar lastro. Testado com quedas de 40% e de 57%.</li></ul></article>
+    </div>
+    <p class="nota">Metade de cada taxa vai para um <b>colchão de proteção</b> que cobre prejuízo de liquidação; a outra metade vai para o criador da rede. Ninguém consegue tirar o colchão de lá.</p>
+  </section>
+
+  <section id="uniswap">
+    <h2>Troque BRLS em qualquer lugar</h2>
+    <p class="sub">O BRLS é um token padrão, sem taxa na transferência: entra em pools da Uniswap, em outras carteiras (MetaMask, Rabby) e em outros aplicativos. Como a Reserva troca a R$ 1, qualquer diferença de preço nas pools é corrigida por quem arbitra.</p>
+    <a class="btn sec" href="guia-pool.html">Passo a passo: criar uma pool na Uniswap</a>
   </section>
 
   <section id="seguranca">
     <h2>Segurança e honestidade</h2>
-    <div class="grade">
-      <div class="card"><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo de ninguém.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar as taxas ou adicionar lastro.</li><li>Atualizar os contratos.</li></ul></div>
-      <div class="card"><h3>O que o administrador pode</h3><ul><li>Pausar a <em>emissão</em> com um lastro em crise. Nada mais.</li></ul><p>Só isso — e está no código.</p></div>
-      <div class="card"><h3>Riscos que existem</h3><ul><li>As stablecoins de Real dependem de seus emissores.</li><li>No cofre cripto, uma queda muito rápida pode gerar prejuízo além do colchão (fica público no contrato).</li><li>Os contratos têm testes amplos, mas ainda não passaram por auditoria externa.</li><li>Perder as 12 palavras = perder o acesso.</li></ul></div>
+    <div class="tres">
+      <article><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar as taxas ou adicionar lastro.</li><li>Trocar o código dos contratos.</li></ul></article>
+      <article><h3>O que o criador pode</h3><ul><li>Pausar a <i>emissão</i> de um lastro em crise. Resgatar continua liberado.</li><li>Desempatar uma disputa, só se o cliente escolheu essa opção, e só entre as propostas dos árbitros.</li></ul></article>
+      <article class="risco"><h3>Riscos que existem</h3><ul><li>BRZ, BRLA e BRL1 são emitidos por empresas que podem congelar endereços.</li><li>Uma queda muito rápida de cripto pode gerar prejuízo além do colchão; ele fica público no contrato.</li><li>Os contratos têm testes amplos, mas <b>ainda não passaram por auditoria externa</b>.</li><li>Perdeu as 12 palavras, perdeu o acesso. Ninguém recupera por você.</li></ul></article>
     </div>
   </section>
 
   <section id="contratos">
-    <h2>Contratos</h2>
-    <p class="sub">Endereços lidos dos arquivos públicos de implantação deste site. Confira sempre no PolygonScan.</p>
-    <div class="card" id="tabela-contratos"><p class="mudo">Carregando…</p></div>
-    <p class="mudo" style="margin-top:12px">Taxa vitalícia de 0,1% para a carteira do criador: <span class="mono">0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1</span></p>
+    <h2>Contratos públicos</h2>
+    <p class="sub">Endereços lidos dos arquivos de implantação deste site. Confira sempre.</p>
+    <div class="cartao" id="tabela-contratos"><p class="mudo">Carregando…</p></div>
   </section>
 
   <section id="faq">
-    <h2>Perguntas frequentes</h2>
-    <details><summary>xBRL é dinheiro de verdade?</summary><p>É um token que vale R$ 1 porque cada unidade é lastreada por R$ 1 em stablecoins de Real (BRZ, BRLA) guardadas no contrato da Reserva, e pode ser resgatada por elas a qualquer momento.</p></details>
-    <details><summary>Preciso de cadastro?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para trocar reais por BRZ/BRLA você usa a corretora ou o emissor de sua preferência.</p></details>
-    <details><summary>xBRL rende juros?</summary><p>Não. xBRL não promete nem paga rendimento. Ele é um Real digital que você controla sozinho.</p></details>
-    <details><summary>Quanto custa?</summary><p>Transferir xBRL não tem taxa do protocolo. Emitir, resgatar e receber pagamento de trabalho custam 0,1%. A rede Polygon cobra centavos de POL por operação.</p></details>
-    <details><summary>No cofre, recebo um NFT da minha posição?</summary><p>Hoje não: a posição fica ligada à sua carteira e só você mexe nela. Vender posições como NFT é uma possibilidade futura, num contrato novo, sem mudar as regras deste.</p></details>
-    <details><summary>E se o site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby…).</p></details>
+    <h2>Dúvidas</h2>
+    <details><summary>BRLS é dinheiro de verdade?</summary><p>É um token que vale R$ 1 porque cada unidade tem R$ 1 de lastro guardado em contrato público (stablecoins de Real ou cripto com garantia de sobra), e pode ser trocada de volta.</p></details>
+    <details><summary>Preciso de cadastro ou CPF?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para comprar BRZ, BRLA ou BRL1 com reais você usa a corretora ou o emissor que preferir, e lá eles podem pedir cadastro.</p></details>
+    <details><summary>BRLS rende juros?</summary><p>Não. O BRLS não promete nem paga rendimento. Ele é um real digital que você controla sozinho.</p></details>
+    <details><summary>Quanto custa?</summary><p>Enviar BRLS: só a taxa da rede, centavos de POL. Trocar na Reserva e receber pagamento de trabalho: 0,1%. Emitir no cofre cripto: 0,5% somado à dívida.</p></details>
+    <details><summary>Fiquei sem POL no meio de um trabalho. E agora?</summary><p>Toque na ação normalmente: a carteira gera um QR (ou link de WhatsApp) e a outra pessoa envia por você, pagando os centavos da taxa.</p></details>
+    <details><summary>E se este site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby).</p></details>
+    <details><summary>Vou poder vender minha posição do cofre?</summary><p>Hoje a posição fica ligada à sua carteira. Transformar posições em NFT para poderem ser vendidas é uma possibilidade futura, sempre num contrato novo, sem mudar as regras deste.</p></details>
   </section>
 </main>
 
-<footer>
-  <div class="wrap">
-    <p><b>xBRL</b> — O Real Soberano &amp; Inconfiscável na Rede Polygon. Software livre, sem garantias. Não é instituição financeira, não é investimento, não paga rendimento e não tem garantia do FGC. Use por sua conta e risco.</p>
-    <p><a href="wallet/">Carteira</a> · <a href="https://github.com/digitalrobertlima/xBRL" rel="noopener">Código-fonte</a></p>
-  </div>
+<footer class="rodape">
+  <p><b>BRLS — Real Soberano</b>, na rede Polygon. Software livre, sem garantias. Não é instituição financeira, não é investimento, não paga rendimento e não tem garantia do FGC. Use por sua conta e risco.</p>
+  <p><a href="wallet/">Carteira</a> · <a href="guia-pool.html">Guia da pool</a> · <a href="https://github.com/digitalrobertlima/xBRL" rel="noopener">Código-fonte</a></p>
 </footer>
-
-<script>
-  (async () => {
-    const redes = [[137, "Polygon PoS", "https://polygonscan.com"], [80002, "Polygon Amoy (teste)", "https://amoy.polygonscan.com"]];
-    const nomes = ["xBRL", "ReservaBRL", "CofreCripto", "EscrowTrabalho", "Mensageiro"];
-    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-    let html = "<table><thead><tr><th>Contrato</th>" + redes.map((r) => `<th>${r[1]}</th>`).join("") + "</tr></thead><tbody>";
-    const dados = await Promise.all(redes.map(([id]) => fetch(`wallet/src/deployments/${id}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
-    for (const n of nomes) {
-      html += `<tr><td><b>${n}</b></td>` + redes.map(([, , exp], i) => {
-        const a = dados[i]?.[n];
-        return `<td>${a && /^0x[0-9a-fA-F]{40}$/.test(a) ? `<a class="mono" href="${exp}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : '<span class="mudo">aguardando implantação</span>'}</td>`;
-      }).join("") + "</tr>";
-    }
-    document.getElementById("tabela-contratos").innerHTML = html + "</tbody></table>";
-  })();
-</script>
+<script type="module" src="site.js"></script>
 </body>
 </html>

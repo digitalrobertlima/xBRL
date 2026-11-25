@@ -8,14 +8,14 @@ import { PALAVRAS } from "./palavras-pt.js";
 
 const e = () => globalThis.ethers;
 export const PALAVRAS_CODIGO = 5; // 5 × 11 bits = 55 bits de segredo
-export const PALAVRAS_CODIGO_ALTO_VALOR = 6; // 66 bits — a partir de 1.000 xBRL
+export const PALAVRAS_CODIGO_ALTO_VALOR = 6; // 66 bits — a partir de 1.000 BRLS
 
 // --------------------------- Reputação ---------------------------
 
 const DIA = 86_400;
 const E18 = 10n ** 18n;
 /** Requisitos por nível (iguais a EscrowTrabalho.nivel): contrapartes, avaliadores, média×100, disputa máx (bps),
- * volume mínimo (xBRL) e idade mínima (dias). */
+ * volume mínimo (BRLS) e idade mínima (dias). */
 export const REGRAS_NIVEL = [
   null,
   null,
@@ -225,8 +225,9 @@ export class EscrowClient {
 
   /** Lê o estado atual on-chain de um trabalho. */
   async detalhe(id) {
-    const [t, a, c] = await Promise.all([this.contrato.trabalho(id), this.contrato.arbitragem(id), this.contrato.caucao(id)]);
+    const [t, a, c, kit] = await Promise.all([this.contrato.trabalho(id), this.contrato.arbitragem(id), this.contrato.caucao(id), this.contrato.kitGas(id).catch(() => 0n)]);
     return {
+      kitGas: kit,
       arbitroCliente: a.arbitroCliente,
       arbitroTrabalhador: a.arbitroTrabalhador,
       propostaArbCliente: Number(a.propostaArbCliente),

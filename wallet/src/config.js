@@ -7,7 +7,7 @@ import { ABIS } from "./abis.js";
 
 export { ABIS };
 
-export const VERSAO = "2.0.0-beta";
+export const VERSAO = "3.0.0";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
 export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 
@@ -94,7 +94,7 @@ export const ESCROW = {
     { id: 2, nome: "Remoto", icone: "💻", resumo: "Trabalho digital. Aprovação ou 3 dias de silêncio." },
     { id: 3, nome: "Por etapas", icone: "🧱", resumo: "Projeto em parcelas iguais (2 a 50)." },
   ],
-  caucaoMinima: 200, // xBRL — só ENTREGA
+  caucaoMinima: 200, // BRLS — só ENTREGA
   prazoArbitrosDias: 3, // divergência dos árbitros antes do desempate do criador
   estados: ["Aberto", "Em execução", "Entregue", "Em disputa", "Concluído", "Cancelado"],
 };
@@ -120,14 +120,31 @@ export async function carregarImplantacao(chainId) {
     if (!r.ok) return null;
     const j = await r.json();
     // Implantações antigas (sem cofre/mensageiro) usam ABIs diferentes: são ignoradas.
-    if (Number(j.chainId) !== Number(chainId) || !j.xBRL || !j.CofreCripto || !j.Mensageiro) return null;
+    if (Number(j.chainId) !== Number(chainId) || !j.xBRL || !j.CofreCripto || !j.Mensageiro) return null; // sem Encaminhador = versão anterior (ações sem gás desligadas)
     return j;
   } catch {
     return null;
   }
 }
 
+/** Comprovantes de transação abrem a nossa página em português; endereços vão ao explorador. */
 export function linkExplorer(chainId, tipo, valor) {
+  if (tipo === "tx") return `${new URL("../comprovante.html", import.meta.url).pathname}?rede=${chainId}&tx=${valor}`;
+  return linkTecnico(chainId, tipo, valor);
+}
+
+/** Link para o explorador técnico (Polygonscan), em inglês. */
+export function linkTecnico(chainId, tipo, valor) {
   const base = REDES[chainId]?.explorer;
   return base ? `${base}/${tipo}/${valor}` : "";
+}
+
+/** Implantação anterior (beta), se existir: só para resgatar saldos antigos. */
+export async function carregarImplantacaoBeta(chainId) {
+  try {
+    const r = await fetch(new URL(`./deployments/${chainId}-beta.json`, import.meta.url), { cache: "no-cache" });
+    return r.ok ? await r.json() : null;
+  } catch {
+    return null;
+  }
 }

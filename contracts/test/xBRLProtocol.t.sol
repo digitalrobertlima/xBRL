@@ -8,6 +8,8 @@ import {ReservaBRL} from "../src/ReservaBRL.sol";
 import {EscrowTrabalho} from "../src/EscrowTrabalho.sol";
 import {CofreCripto} from "../src/CofreCripto.sol";
 import {Mensageiro} from "../src/Mensageiro.sol";
+import {Encaminhador} from "../src/Encaminhador.sol";
+import {ERC2771Forwarder} from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 import {DeployPolygon, OraculoTeste} from "../script/DeployPolygon.s.sol";
 
 // =====================================================================
@@ -114,6 +116,7 @@ abstract contract Base is Test {
     int56 internal constant TICK_ETH_2500 = -198_080;
 
     xBRL internal token;
+    Encaminhador internal fwd;
     ReservaBRL internal reserva;
     EscrowTrabalho internal escrow;
     CofreCripto internal cofre;
@@ -151,8 +154,41 @@ abstract contract Base is Test {
         lastros[0] = address(brz);
         lastros[1] = address(brla);
         reserva = new ReservaBRL(address(token), TREASURY, address(cofre), lastros, dono, 0);
-        escrow = new EscrowTrabalho(address(token), TREASURY, address(cofre));
+        fwd = new Encaminhador();
+        escrow = new EscrowTrabalho(address(token), TREASURY, address(cofre), address(fwd));
         token.inicializar(address(reserva), address(cofre));
+    }
+
+    function _pedido(Encaminhador f, uint256 pk, address alvo, bytes memory dados)
+        internal
+        view
+        returns (ERC2771Forwarder.ForwardRequestData memory r)
+    {
+        address de = vm.addr(pk);
+        r.from = de;
+        r.to = alvo;
+        r.gas = 500_000;
+        r.deadline = uint48(block.timestamp + 1 hours);
+        r.data = dados;
+        bytes32 tipo = keccak256(
+            "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
+        );
+        bytes32 h = keccak256(
+            abi.encode(tipo, de, alvo, uint256(0), r.gas, f.nonces(de), r.deadline, keccak256(dados))
+        );
+        bytes32 dom = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("xBRL Encaminhador"),
+                keccak256("1"),
+                block.chainid,
+                address(f)
+            )
+        );
+        (uint8 v, bytes32 rr, bytes32 ss) = vm.sign(pk, keccak256(abi.encodePacked("\x19\x01", dom, h)));
+        r.signature = abi.encodePacked(rr, ss, v);
     }
 
     function _comPool() internal view virtual returns (bool) {
@@ -252,8 +288,8 @@ abstract contract Base is Test {
 
 contract XBRLTokenTest is Base {
     function test_Metadados() public view {
-        assertEq(token.name(), "xBRL Real Soberano");
-        assertEq(token.symbol(), "xBRL");
+        assertEq(token.name(), "Real Soberano");
+        assertEq(token.symbol(), "BRLS");
         assertEq(token.decimals(), 18);
         assertEq(token.reserva(), address(reserva));
         assertEq(token.cofre(), address(cofre));
@@ -1498,6 +1534,110 @@ contract EscrowTrabalhoTest is Base {
         assertEq(escrow.nivel(trab), 2);
     }
 
+    // ---------------- Sem gás: assinou, outra pessoa envia ----------------
+
+    function test_TrabalhadorSemGasAceitaEEntregaPorAssinatura() public {
+        (address sem, uint256 pk) = makeAddrAndKey("jessica-sem-gas");
+        assertEq(sem.balance, 0);
+        uint256 id = _novo(EscrowTrabalho.Modalidade.Presencial, sem, 2e18);
+        ERC2771Forwarder.ForwardRequestData memory r =
+            _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))));
+        vm.prank(cliente); // o cliente lê o QR e paga o gás
+        fwd.execute(r);
+        assertEq(uint8(_estado(id)), uint8(EscrowTrabalho.Estado.Aceito));
+        vm.prank(cliente);
+        vm.expectRevert();
+        fwd.execute(r); // assinatura não vale duas vezes
+        r = _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.confirmarChegada, (id, CHEGADA)));
+        fwd.execute(r);
+        r = _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.marcarEntregue, (id)));
+        fwd.execute(r);
+        vm.prank(cliente);
+        escrow.liberar(id);
+        assertEq(token.balanceOf(sem), 1.998e18);
+    }
+
+    function test_AssinaturaAdulteradaOuDeOutroNaoPassa() public {
+        (address sem, uint256 pk) = makeAddrAndKey("jessica-sem-gas");
+        (, uint256 intruso) = makeAddrAndKey("intruso");
+        uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, sem, 2e18);
+        ERC2771Forwarder.ForwardRequestData memory r =
+            _pedido(fwd, intruso, address(escrow), abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))));
+        vm.expectRevert(); // intruso não é o trabalhador designado
+        fwd.execute(r);
+        r = _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))));
+        r.data = abi.encodeCall(EscrowTrabalho.desistir, (id)); // relayer troca a ação
+        vm.expectRevert();
+        fwd.execute(r);
+        r = _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))));
+        vm.warp(block.timestamp + 2 hours);
+        vm.expectRevert(); // prazo da assinatura vencido
+        fwd.execute(r);
+        // Chamar o escrow "fingindo" ser o encaminhador não funciona para quem não é o encaminhador
+        vm.prank(alice);
+        (bool ok,) = address(escrow)
+            .call(abi.encodePacked(abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))), sem));
+        assertFalse(ok);
+    }
+
+    // ---------------- Kit de gás ----------------
+
+    function _criarComKit(EscrowTrabalho.NovoTrabalho memory p, uint256 kit) internal returns (uint256 id) {
+        vm.deal(cliente, cliente.balance + kit);
+        vm.prank(cliente);
+        id = escrow.criarTrabalho{value: kit}(p);
+    }
+
+    function test_KitDeGasChegaAoTrabalhadorDesignadoNoAceite() public {
+        (address sem, uint256 pk) = makeAddrAndKey("jessica-sem-gas");
+        uint256 id = _criarComKit(_param(EscrowTrabalho.Modalidade.Presencial, sem, 2e18), 0.3 ether);
+        assertEq(escrow.kitGas(id), 0.3 ether);
+        fwd.execute(
+            _pedido(fwd, pk, address(escrow), abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0))))
+        );
+        assertEq(sem.balance, 0.3 ether, "agora ela tem gas para o resto do trabalho");
+        assertEq(escrow.kitGas(id), 0);
+    }
+
+    function test_KitDeGasVagaAbertaSoAposAprovacaoEVoltaSeCancelar() public {
+        uint256 id = _criarComKit(_param(EscrowTrabalho.Modalidade.Remoto, address(0), 5e18), 0.2 ether);
+        _aceitar(id, trab, address(0));
+        uint256 antes = trab.balance;
+        assertEq(trab.balance, antes, "candidato nao recebe kit antes da aprovacao");
+        vm.prank(cliente);
+        escrow.decidirCandidato(id, true);
+        assertEq(trab.balance, antes + 0.2 ether);
+
+        uint256 id2 = _criarComKit(_param(EscrowTrabalho.Modalidade.Remoto, address(0), 5e18), 0.2 ether);
+        uint256 c0 = cliente.balance;
+        vm.prank(cliente);
+        escrow.cancelar(id2);
+        assertEq(cliente.balance, c0 + 0.2 ether);
+    }
+
+    function test_KitDeGasEntregaAbertaSemCaucaoSoNoPagamento() public {
+        uint256 id = _criarComKit(_param(EscrowTrabalho.Modalidade.Entrega, address(0), 25e18), 0.1 ether);
+        uint256 antes = trab.balance;
+        _aceitar(id, trab, address(0));
+        assertEq(trab.balance, antes, "sem caucao: nada de kit no aceite (evita farm de gas)");
+        escrow.confirmarComCodigo(id, CODIGO);
+        assertEq(trab.balance, antes + 0.1 ether);
+    }
+
+    function test_KitDeGasLimiteECarteiraQueRecusa() public {
+        vm.deal(cliente, 10 ether);
+        EscrowTrabalho.NovoTrabalho memory p = _param(EscrowTrabalho.Modalidade.Remoto, trab, 5e18);
+        vm.prank(cliente);
+        vm.expectRevert(EscrowTrabalho.ValorZero.selector);
+        escrow.criarTrabalho{value: 5.1 ether}(p);
+        RecusaPol r = new RecusaPol();
+        deal(address(token), address(r), 10e18, true);
+        p.trabalhador = address(r);
+        uint256 id = _criarComKit(p, 0.3 ether);
+        r.aceitar(escrow, token, id);
+        assertEq(escrow.gasPendente(address(r)), 0.3 ether, "trabalho nao trava; valor fica sacavel");
+    }
+
     function test_AvaliacaoExigeValorMinimo() public {
         uint256 id = _concluirRemoto(cliente, trab, 5e18);
         vm.prank(cliente);
@@ -1512,9 +1652,11 @@ contract EscrowTrabalhoTest is Base {
 
 contract MensageiroTest is Test {
     Mensageiro internal m;
+    Encaminhador internal fwd;
 
     function setUp() public {
-        m = new Mensageiro();
+        fwd = new Encaminhador();
+        m = new Mensageiro(address(fwd));
     }
 
     function _chave(Vm.Wallet memory w) internal pure returns (bytes memory) {
@@ -1533,6 +1675,52 @@ contract MensageiroTest is Test {
         vm.prank(a.addr);
         vm.expectRevert(Mensageiro.ChaveInvalida.selector);
         m.registrarChave(hex"1234");
+    }
+
+    function test_MensagemSemGasPeloEncaminhador() public {
+        Vm.Wallet memory a = vm.createWallet("a");
+        address[] memory para = new address[](1);
+        para[0] = a.addr;
+        bytes[] memory c = new bytes[](1);
+        c[0] = hex"aa";
+        bytes memory dados = abi.encodeCall(Mensageiro.enviar, (keccak256("conversa"), para, c, _chave(a)));
+        ERC2771Forwarder.ForwardRequestData memory r;
+        r.from = a.addr;
+        r.to = address(m);
+        r.gas = 300_000;
+        r.deadline = uint48(block.timestamp + 1 hours);
+        r.data = dados;
+        bytes32 h = keccak256(
+            abi.encode(
+                keccak256(
+                    "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
+                ),
+                a.addr,
+                address(m),
+                uint256(0),
+                r.gas,
+                uint256(0),
+                r.deadline,
+                keccak256(dados)
+            )
+        );
+        bytes32 dom = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("xBRL Encaminhador"),
+                keccak256("1"),
+                block.chainid,
+                address(fwd)
+            )
+        );
+        (uint8 v, bytes32 rr, bytes32 ss) =
+            vm.sign(a.privateKey, keccak256(abi.encodePacked("\x19\x01", dom, h)));
+        r.signature = abi.encodePacked(rr, ss, v);
+        vm.prank(address(0xBEEF));
+        fwd.execute(r);
+        assertEq(m.chavePublica(a.addr), _chave(a), "registrou a chave de quem assinou, nao de quem enviou");
     }
 
     function test_EnviarComLimites() public {
@@ -1608,7 +1796,7 @@ contract DeployScriptTest is Test {
         assertTrue(xBRL(a.token).inicializado());
         assertEq(xBRL(a.token).cofre(), a.cofre);
         assertEq(ReservaBRL(a.reserva).owner(), 0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1);
-        assertEq(ReservaBRL(a.reserva).TETO_RESERVA(), 1_000e18);
+        assertEq(ReservaBRL(a.reserva).TETO_RESERVA(), 0);
         assertEq(CofreCripto(a.cofre).totalAtivos(), 2);
         (, bool ok) = CofreCripto(a.cofre).precoBrl(0);
         assertTrue(ok);
@@ -1632,7 +1820,7 @@ contract DeployScriptTest is Test {
         vm.etch(s.FABRICA_V3(), address(new FabricaVazia()).code);
         DeployPolygon.Implantacao memory a = s.run();
         assertEq(ReservaBRL(a.reserva).listaLastros().length, 3);
-        assertEq(CofreCripto(a.cofre).ativo(0).tetoDivida, 500e18);
+        assertEq(CofreCripto(a.cofre).ativo(0).tetoDivida, type(uint128).max);
         (uint256 preco, bool ok) = CofreCripto(a.cofre).precoBrl(0);
         assertTrue(ok);
         assertApproxEqRel(preco, 13_888.888888e18, 1e12);
@@ -1656,5 +1844,206 @@ contract DeployScriptTest is Test {
 contract FabricaVazia {
     function getPool(address, address, uint24) external pure returns (address) {
         return address(0);
+    }
+}
+
+contract RecusaPol {
+    function aceitar(EscrowTrabalho e, xBRL t, uint256 id) external {
+        t.approve(address(e), type(uint256).max);
+        e.aceitar(id, address(0));
+    }
+
+    receive() external payable {
+        revert("nao aceito POL");
+    }
+}
+
+// =====================================================================
+// Anti-drenagem do Escrow: atores aleatórios fazendo tudo (inclusive por assinatura) nunca conseguem
+// tirar do contrato mais do que está reservado para cada trabalho.
+// =====================================================================
+contract HandlerEscrow is Test {
+    EscrowTrabalho internal e;
+    xBRL internal t;
+    Encaminhador internal f;
+    address[3] internal atores;
+    uint256[3] internal pks;
+    uint256 public sucessos;
+    uint256 public sucessosAssinados;
+    string internal constant CHEG = "porta janela cadeira mesa tapete";
+    string internal constant COD = "vogal imunizar nordeste sapato haver";
+    string internal constant DEV = "barco sereno pilha mostarda grade";
+
+    constructor(EscrowTrabalho e_, xBRL t_, Encaminhador f_) {
+        e = e_;
+        t = t_;
+        f = f_;
+        for (uint256 i = 0; i < 3; ++i) {
+            (atores[i], pks[i]) = makeAddrAndKey(string(abi.encodePacked("ator", i)));
+        }
+    }
+
+    function _a(uint256 s) internal view returns (address) {
+        return atores[s % 3];
+    }
+
+    function _id(uint256 s) internal view returns (uint256) {
+        uint256 n = e.totalTrabalhos();
+        return n == 0 ? 1 : 1 + (s % n);
+    }
+
+    function criar(uint256 quem, uint256 alvo, uint8 mod, uint96 valor, uint96 caucao, uint64 kit) external {
+        address c = _a(quem);
+        EscrowTrabalho.NovoTrabalho memory p;
+        p.modalidade = EscrowTrabalho.Modalidade(mod % 4);
+        p.valor = uint128(bound(valor, 1e18, 500e18));
+        p.prazo = uint64(block.timestamp + 5 days);
+        p.etapas = p.modalidade == EscrowTrabalho.Modalidade.Etapas ? 3 : 1;
+        if (alvo % 2 == 0) p.trabalhador = _a(alvo + 1);
+        if (p.modalidade == EscrowTrabalho.Modalidade.Presencial) p.chegadaHash = e.hashChegada(c, CHEG);
+        if (p.modalidade == EscrowTrabalho.Modalidade.Entrega) {
+            p.codigoHash = e.hashCodigo(c, COD);
+            if (caucao % 2 == 0) {
+                p.caucao = uint128(bound(caucao, 200e18, 400e18));
+                p.devolucaoHash = e.hashDevolucao(c, DEV);
+            }
+        }
+        if (p.trabalhador == c) p.trabalhador = address(0);
+        uint256 v = bound(kit, 0, 1 ether);
+        vm.deal(c, c.balance + v);
+        vm.prank(c);
+        try e.criarTrabalho{value: v}(p) {
+            ++sucessos;
+        } catch {}
+    }
+
+    function agir(uint256 quem, uint256 id, uint8 acao, uint16 bps, bool assinado) external {
+        address a = _a(quem);
+        id = _id(id);
+        bytes memory d;
+        uint8 x = acao % 16;
+        if (x == 0) d = abi.encodeCall(EscrowTrabalho.aceitar, (id, address(0)));
+        else if (x == 1) d = abi.encodeCall(EscrowTrabalho.decidirCandidato, (id, bps % 2 == 0));
+        else if (x == 2) d = abi.encodeCall(EscrowTrabalho.cancelar, (id));
+        else if (x == 3) d = abi.encodeCall(EscrowTrabalho.desistir, (id));
+        else if (x == 4) d = abi.encodeCall(EscrowTrabalho.confirmarChegada, (id, CHEG));
+        else if (x == 5) d = abi.encodeCall(EscrowTrabalho.confirmarChegadaPeloCliente, (id));
+        else if (x == 6) d = abi.encodeCall(EscrowTrabalho.confirmarComCodigo, (id, COD));
+        else if (x == 7) d = abi.encodeCall(EscrowTrabalho.marcarEntregue, (id));
+        else if (x == 8) d = abi.encodeCall(EscrowTrabalho.liberar, (id));
+        else if (x == 9) d = abi.encodeCall(EscrowTrabalho.reivindicar, (id));
+        else if (x == 10) d = abi.encodeCall(EscrowTrabalho.abrirDisputa, (id));
+        else if (x == 11) d = abi.encodeCall(EscrowTrabalho.proporAcordo, (id, uint16(bound(bps, 0, 10_000))));
+        else if (x == 12) d = abi.encodeCall(EscrowTrabalho.reembolsarPorPrazo, (id));
+        else if (x == 13) d = abi.encodeCall(EscrowTrabalho.resolverPorTempo, (id));
+        else if (x == 14) d = abi.encodeCall(EscrowTrabalho.confirmarDevolucao, (id, DEV));
+        else d = abi.encodeCall(EscrowTrabalho.sacarGasPendente, ());
+        if (!assinado) {
+            vm.prank(a);
+            (bool ok,) = address(e).call(d);
+            if (ok) ++sucessos;
+            return;
+        }
+        uint256 pk = pks[quem % 3];
+        ERC2771Forwarder.ForwardRequestData memory r;
+        r.from = a;
+        r.to = address(e);
+        r.gas = 600_000;
+        r.deadline = uint48(block.timestamp + 1 hours);
+        r.data = d;
+        bytes32 h = keccak256(
+            abi.encode(
+                keccak256(
+                    "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
+                ),
+                a,
+                address(e),
+                uint256(0),
+                r.gas,
+                f.nonces(a),
+                r.deadline,
+                keccak256(d)
+            )
+        );
+        bytes32 dom = keccak256(
+            abi.encode(
+                keccak256(
+                    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                ),
+                keccak256("xBRL Encaminhador"),
+                keccak256("1"),
+                block.chainid,
+                address(f)
+            )
+        );
+        (uint8 v, bytes32 rr, bytes32 ss) = vm.sign(pk, keccak256(abi.encodePacked("\x19\x01", dom, h)));
+        r.signature = abi.encodePacked(rr, ss, v);
+        uint256 nonceAntes = f.nonces(a);
+        try f.execute(r) {
+            if (f.nonces(a) > nonceAntes) ++sucessosAssinados;
+        } catch {}
+    }
+
+    function tempo(uint256 s) external {
+        vm.warp(block.timestamp + bound(s, 1 hours, 12 days));
+    }
+
+    function ator(uint256 i) external view returns (address) {
+        return atores[i];
+    }
+}
+
+contract EscrowAntiDrenagemTest is Base {
+    HandlerEscrow internal h;
+
+    function setUp() public override {
+        super.setUp();
+        h = new HandlerEscrow(escrow, token, fwd);
+        for (uint256 i = 0; i < 3; ++i) {
+            address a = h.ator(i);
+            deal(address(token), a, 1_000_000e18, true);
+            vm.prank(a);
+            token.approve(address(escrow), type(uint256).max);
+        }
+        targetContract(address(h));
+    }
+
+    /// Saldo de BRLS do contrato = exatamente o que ainda não foi pago de cada trabalho + cauções travadas.
+    function invariant_BRLSDoEscrowBateCentavoPorCentavo() public view {
+        uint256 devido;
+        uint256 n = escrow.totalTrabalhos();
+        for (uint256 id = 1; id <= n; ++id) {
+            EscrowTrabalho.Trabalho memory t = escrow.trabalho(id);
+            devido += uint256(t.valor) - t.pago;
+            if (escrow.caucao(id).travada) devido += escrow.caucao(id).valor;
+        }
+        assertEq(token.balanceOf(address(escrow)), devido, "escrow com BRLS faltando ou sobrando");
+    }
+
+    /// POL do contrato = kits ainda não entregues + valores pendentes de saque.
+    function invariant_POLDoEscrowBate() public view {
+        uint256 devido;
+        uint256 n = escrow.totalTrabalhos();
+        for (uint256 id = 1; id <= n; ++id) {
+            devido += escrow.kitGas(id);
+        }
+        for (uint256 i = 0; i < 3; ++i) {
+            devido += escrow.gasPendente(h.ator(i));
+        }
+        assertEq(address(escrow).balance, devido, "escrow com POL faltando ou sobrando");
+    }
+
+    function afterInvariant() public view {
+        // Garante que o ator aleatório realmente mexe nos trabalhos (e não só falha em tudo).
+        assertGt(h.sucessos() + h.sucessosAssinados(), 5, "o ator aleatorio quase nao conseguiu agir");
+    }
+
+    /// Nenhum trabalho paga mais do que o valor travado.
+    function invariant_NuncaPagaMaisQueOValor() public view {
+        uint256 n = escrow.totalTrabalhos();
+        for (uint256 id = 1; id <= n; ++id) {
+            EscrowTrabalho.Trabalho memory t = escrow.trabalho(id);
+            assertLe(t.pago, t.valor);
+        }
     }
 }

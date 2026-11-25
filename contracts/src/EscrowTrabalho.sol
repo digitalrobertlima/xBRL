@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 
 /// @title EscrowTrabalho — marketplace universal de trabalho pago em xBRL, sem intermediário
 /// @notice O cliente trava o pagamento no contrato; o trabalhador recebe ao cumprir as regras da modalidade.
@@ -39,7 +40,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///
 /// Reputação anti-contas-falsas: o nível considera contrapartes DISTINTAS, volume pago, idade da conta,
 /// estrelas (uma por par de contas, a última vale) e taxa de disputas. Avaliação só em trabalhos >= 10 xBRL.
-contract EscrowTrabalho is ReentrancyGuard {
+contract EscrowTrabalho is ReentrancyGuard, ERC2771Context {
     using SafeERC20 for IERC20;
 
     enum Modalidade {
@@ -138,6 +139,15 @@ contract EscrowTrabalho is ReentrancyGuard {
     mapping(address => Reputacao) public reputacao;
     mapping(uint256 => Arbitragem) private _arbitragens;
     mapping(uint256 => Caucao) private _caucoes;
+
+    /// @notice Kit de gás: POL que o cliente deixa junto com o pagamento para o trabalhador nunca travar
+    /// por falta de taxa. Vai ao trabalhador quando ele é confirmado (designado que aceitou, candidato
+    /// aprovado, ou entregador com caução); em vaga aberta de entrega sem caução, vai junto com o pagamento.
+    /// Se o trabalho for cancelado antes disso, volta ao cliente.
+    mapping(uint256 => uint256) public kitGas;
+    /// @notice POL que não pôde ser enviado direto (carteira-contrato que recusa): sacável pelo dono.
+    mapping(address => uint256) public gasPendente;
+    uint256 public constant KIT_GAS_MAXIMO = 5 ether;
     mapping(bytes32 => bool) private _parJaConcluiu; // par (a, b) sem ordem
     mapping(bytes32 => uint8) private _estrelasDoPar; // avaliador -> avaliado (última nota)
 
@@ -153,6 +163,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         bool comChegada,
         string descricao
     );
+    event KitGas(uint256 indexed id, address indexed para, uint256 valor, bool devolvido);
     event TrabalhoConfigurado(
         uint256 indexed id, address indexed arbitroCliente, bool desempateCriador, uint256 caucao
     );
@@ -199,7 +210,9 @@ contract EscrowTrabalho is ReentrancyGuard {
     error ForaDoIntervaloDosArbitros();
     error AguardandoArbitros(uint256 liberaEm);
 
-    constructor(address xbrl, address treasury, address colchao) {
+    constructor(address xbrl, address treasury, address colchao, address encaminhador)
+        ERC2771Context(encaminhador)
+    {
         if (xbrl == address(0) || treasury == address(0) || colchao == address(0)) revert ValorZero();
         XBRL = IERC20(xbrl);
         CREATOR_TREASURY = treasury;
@@ -210,10 +223,11 @@ contract EscrowTrabalho is ReentrancyGuard {
     // Criação e aceite
     // ------------------------------------------------------------------
 
-    function criarTrabalho(NovoTrabalho calldata p) external nonReentrant returns (uint256 id) {
+    function criarTrabalho(NovoTrabalho calldata p) external payable nonReentrant returns (uint256 id) {
         if (p.valor == 0) revert ValorZero();
+        if (msg.value > KIT_GAS_MAXIMO) revert ValorZero();
         if (p.prazo <= block.timestamp) revert PrazoInvalido();
-        if (p.trabalhador == msg.sender) revert NaoAutorizado();
+        if (p.trabalhador == _msgSender()) revert NaoAutorizado();
         uint8 etapas = 1;
         if (p.modalidade == Modalidade.Etapas) {
             if (p.etapas < 2 || p.etapas > MAX_ETAPAS) revert EtapasInvalidas();
@@ -231,7 +245,7 @@ contract EscrowTrabalho is ReentrancyGuard {
 
         id = ++totalTrabalhos;
         Trabalho storage t = _trabalhos[id];
-        t.cliente = msg.sender;
+        t.cliente = _msgSender();
         t.trabalhador = p.trabalhador;
         t.modalidade = p.modalidade;
         t.estado = Estado.Aberto;
@@ -251,13 +265,16 @@ contract EscrowTrabalho is ReentrancyGuard {
             c.devolucaoHash = p.devolucaoHash;
         }
 
-        XBRL.safeTransferFrom(msg.sender, address(this), p.valor);
+        kitGas[id] = msg.value;
+        // `_msgSender()` é quem chamou ou quem ASSINOU via Encaminhador (ERC-2771): sempre o próprio dono.
+        // forge-lint: disable-next-line(arbitrary-send-erc20)
+        XBRL.safeTransferFrom(_msgSender(), address(this), p.valor);
         if (p.arbitroCliente != address(0) || p.desempateCriador || p.caucao != 0) {
             emit TrabalhoConfigurado(id, p.arbitroCliente, p.desempateCriador, p.caucao);
         }
         emit TrabalhoCriado(
             id,
-            msg.sender,
+            _msgSender(),
             p.trabalhador,
             p.modalidade,
             p.valor,
@@ -280,44 +297,46 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (t.estado != Estado.Aberto) revert EstadoInvalido(t.estado);
         if (block.timestamp >= t.prazo) revert PrazoInvalido();
         if (t.trabalhador == address(0)) {
-            if (msg.sender == t.cliente) revert NaoAutorizado();
-        } else if (msg.sender != t.trabalhador || t.pendenteAprovacao) {
+            if (_msgSender() == t.cliente) revert NaoAutorizado();
+        } else if (_msgSender() != t.trabalhador || t.pendenteAprovacao) {
             revert NaoAutorizado();
         }
         Arbitragem storage a = _arbitragens[id];
         if (a.arbitroCliente == address(0)) {
             if (arbitro != address(0)) revert ArbitroInvalido();
-        } else if (arbitro == address(0) || arbitro == t.cliente || arbitro == msg.sender) {
+        } else if (arbitro == address(0) || arbitro == t.cliente || arbitro == _msgSender()) {
             revert ArbitroInvalido();
-        } else if (a.arbitroCliente == msg.sender) {
+        } else if (a.arbitroCliente == _msgSender()) {
             revert ArbitroInvalido(); // o árbitro do cliente não pode ser o próprio trabalhador
         }
         a.arbitroTrabalhador = arbitro;
         if (arbitro != address(0)) emit ArbitroDoTrabalhador(id, arbitro);
 
-        if (t.trabalhador == address(0)) {
-            t.trabalhador = msg.sender;
-            if (t.modalidade != Modalidade.Entrega) {
-                t.pendenteAprovacao = true;
-                emit CandidaturaRecebida(id, msg.sender);
-                return;
-            }
+        if (t.trabalhador == address(0) && t.modalidade != Modalidade.Entrega) {
+            t.trabalhador = _msgSender();
+            t.pendenteAprovacao = true;
+            emit CandidaturaRecebida(id, _msgSender());
+            return;
         }
-        _travarCaucao(id, msg.sender);
+        bool designado = t.trabalhador != address(0);
+        if (!designado) t.trabalhador = _msgSender();
+        _travarCaucao(id, _msgSender());
         t.estado = Estado.Aceito;
-        emit TrabalhoAceito(id, msg.sender);
+        emit TrabalhoAceito(id, _msgSender());
+        if (designado || _caucoes[id].travada) _entregarKit(id, _msgSender(), false);
     }
 
     /// @notice Cliente aprova (true) ou recusa (false) o candidato de uma vaga aberta.
-    function decidirCandidato(uint256 id, bool aprovar) external {
+    function decidirCandidato(uint256 id, bool aprovar) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (_msgSender() != t.cliente) revert NaoAutorizado();
         if (t.estado != Estado.Aberto || !t.pendenteAprovacao) revert EstadoInvalido(t.estado);
         address candidato = t.trabalhador;
         t.pendenteAprovacao = false;
         if (aprovar) {
             t.estado = Estado.Aceito;
             emit TrabalhoAceito(id, candidato);
+            _entregarKit(id, candidato, false);
         } else {
             t.trabalhador = address(0);
             _arbitragens[id].arbitroTrabalhador = address(0);
@@ -328,23 +347,24 @@ contract EscrowTrabalho is ReentrancyGuard {
     /// @notice Cliente cancela enquanto ninguém aceitou. Reembolso integral, sem taxa.
     function cancelar(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (_msgSender() != t.cliente) revert NaoAutorizado();
         if (t.estado != Estado.Aberto) revert EstadoInvalido(t.estado);
         t.estado = Estado.Cancelado;
         _reembolsarRestante(id, t);
         emit TrabalhoCancelado(id);
+        _entregarKit(id, t.cliente, true);
     }
 
     /// @notice Trabalhador desiste antes de entregar (o restante volta ao cliente).
     /// Candidato ainda não aprovado apenas retira a candidatura (a vaga reabre).
     function desistir(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (_msgSender() != t.trabalhador) revert NaoAutorizado();
         if (t.pendenteAprovacao) {
             t.pendenteAprovacao = false;
             t.trabalhador = address(0);
             _arbitragens[id].arbitroTrabalhador = address(0);
-            emit CandidaturaEncerrada(id, msg.sender, false);
+            emit CandidaturaEncerrada(id, _msgSender(), false);
             return;
         }
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
@@ -353,19 +373,21 @@ contract EscrowTrabalho is ReentrancyGuard {
         t.estado = Estado.Cancelado;
         _reembolsarRestante(id, t);
         emit TrabalhoCancelado(id);
+        _entregarKit(id, t.cliente, true);
     }
 
     /// @notice Prazo venceu sem entrega: cliente recupera o que não foi pago.
     /// ENTREGA com caução: sem código de entrega nem de devolução até o prazo, a caução vai ao cliente.
     function reembolsarPorPrazo(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (_msgSender() != t.cliente) revert NaoAutorizado();
         if (t.estado != Estado.Aberto && t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         if (block.timestamp <= t.prazo) revert PrazoNaoVencido(t.prazo);
         t.estado = Estado.Cancelado;
         _reembolsarRestante(id, t);
         _liberarCaucao(id, t.cliente);
         emit TrabalhoCancelado(id);
+        _entregarKit(id, t.cliente, true);
     }
 
     /// @notice ENTREGA com caução: o entregador devolveu a mercadoria ao cliente e recebeu dele o código de
@@ -380,6 +402,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         _reembolsarRestante(id, t);
         _liberarCaucao(id, t.trabalhador);
         emit Devolvido(id);
+        _entregarKit(id, t.cliente, true);
     }
 
     // ------------------------------------------------------------------
@@ -390,18 +413,18 @@ contract EscrowTrabalho is ReentrancyGuard {
     /// (palavras ou QR mostrados pelo cliente). Sem isso não dá para marcar entrega nem liberar por código.
     function confirmarChegada(uint256 id, string calldata codigo) external {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (_msgSender() != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         if (t.modalidade != Modalidade.Presencial) revert ModalidadeInvalida();
         if (hashChegada(t.cliente, codigo) != t.chegadaHash) revert CodigoIncorreto();
         t.chegou = true;
-        emit ChegadaConfirmada(id, msg.sender);
+        emit ChegadaConfirmada(id, _msgSender());
     }
 
     /// @notice PRESENCIAL: o próprio cliente confirma que o trabalhador chegou (alternativa sem câmera).
     function confirmarChegadaPeloCliente(uint256 id) external {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (_msgSender() != t.cliente) revert NaoAutorizado();
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         if (t.modalidade != Modalidade.Presencial) revert ModalidadeInvalida();
         t.chegou = true;
@@ -423,7 +446,7 @@ contract EscrowTrabalho is ReentrancyGuard {
     /// @notice Trabalhador marca a entrega (da etapa atual, se ETAPAS). Inicia a janela de revisão de 3 dias.
     function marcarEntregue(uint256 id) external {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (_msgSender() != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         if (t.modalidade == Modalidade.Entrega) revert ModalidadeInvalida(); // entrega exige código
         if (t.modalidade == Modalidade.Presencial && !t.chegou) revert ChegadaObrigatoria();
@@ -435,7 +458,7 @@ contract EscrowTrabalho is ReentrancyGuard {
     /// @notice Cliente aprova e libera (tudo, ou a próxima etapa).
     function liberar(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (_msgSender() != t.cliente) revert NaoAutorizado();
         if (t.estado != Estado.Aceito && t.estado != Estado.Entregue) revert EstadoInvalido(t.estado);
         _liberarProxima(id, t);
     }
@@ -443,7 +466,7 @@ contract EscrowTrabalho is ReentrancyGuard {
     /// @notice Trabalhador saca após 3 dias da entrega marcada sem contestação.
     function reivindicar(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (_msgSender() != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Entregue) revert EstadoInvalido(t.estado);
         uint256 liberaEm = uint256(t.entregueEm) + PRAZO_REVISAO;
         if (block.timestamp < liberaEm) revert RevisaoEmAndamento(liberaEm);
@@ -456,14 +479,14 @@ contract EscrowTrabalho is ReentrancyGuard {
 
     function abrirDisputa(uint256 id) external {
         Trabalho storage t = _existente(id);
-        if (msg.sender != t.cliente && msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (_msgSender() != t.cliente && _msgSender() != t.trabalhador) revert NaoAutorizado();
         if (t.estado != Estado.Aceito && t.estado != Estado.Entregue) revert EstadoInvalido(t.estado);
         if (t.modalidade == Modalidade.Entrega) revert SemDisputaNaEntrega();
         t.estado = Estado.Disputa;
         t.disputaEm = SafeCast.toUint64(block.timestamp);
         ++reputacao[t.cliente].disputas;
         ++reputacao[t.trabalhador].disputas;
-        emit DisputaAberta(id, msg.sender);
+        emit DisputaAberta(id, _msgSender());
     }
 
     /// @notice Propõe a fatia do valor restante que vai ao trabalhador (0 a 10.000 bps).
@@ -473,14 +496,14 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (t.estado != Estado.Disputa) revert EstadoInvalido(t.estado);
         if (bpsTrabalhador > BPS) revert BpsInvalido();
         uint16 codificado = bpsTrabalhador + 1;
-        if (msg.sender == t.cliente) {
+        if (_msgSender() == t.cliente) {
             t.propostaCliente = codificado;
-        } else if (msg.sender == t.trabalhador) {
+        } else if (_msgSender() == t.trabalhador) {
             t.propostaTrabalhador = codificado;
         } else {
             revert NaoAutorizado();
         }
-        emit AcordoProposto(id, msg.sender, bpsTrabalhador);
+        emit AcordoProposto(id, _msgSender(), bpsTrabalhador);
         if (t.propostaCliente != 0 && t.propostaCliente == t.propostaTrabalhador) {
             _resolver(id, t, bpsTrabalhador, true);
         }
@@ -494,13 +517,13 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (bpsTrabalhador > BPS) revert BpsInvalido();
         Arbitragem storage a = _arbitragens[id];
         if (a.arbitroCliente == address(0)) revert ArbitroInvalido();
-        bool ehCliente = msg.sender == a.arbitroCliente;
-        bool ehTrabalhador = msg.sender == a.arbitroTrabalhador;
+        bool ehCliente = _msgSender() == a.arbitroCliente;
+        bool ehTrabalhador = _msgSender() == a.arbitroTrabalhador;
         if (!ehCliente && !ehTrabalhador) revert NaoAutorizado();
         uint16 codificado = bpsTrabalhador + 1;
         if (ehCliente) a.propostaArbCliente = codificado;
         if (ehTrabalhador) a.propostaArbTrabalhador = codificado;
-        emit ArbitroPropos(id, msg.sender, bpsTrabalhador);
+        emit ArbitroPropos(id, _msgSender(), bpsTrabalhador);
         if (a.propostaArbCliente != 0 && a.propostaArbTrabalhador != 0) {
             if (a.propostaArbCliente == a.propostaArbTrabalhador) {
                 _resolver(id, t, bpsTrabalhador, true);
@@ -516,7 +539,7 @@ contract EscrowTrabalho is ReentrancyGuard {
     function desempatar(uint256 id, uint16 bpsTrabalhador) external nonReentrant {
         Trabalho storage t = _existente(id);
         if (t.estado != Estado.Disputa) revert EstadoInvalido(t.estado);
-        if (msg.sender != CREATOR_TREASURY) revert NaoAutorizado();
+        if (_msgSender() != CREATOR_TREASURY) revert NaoAutorizado();
         if (bpsTrabalhador > BPS) revert BpsInvalido();
         Arbitragem storage a = _arbitragens[id];
         if (!a.desempateCriador) revert NaoAutorizado();
@@ -564,11 +587,11 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (estrelas < 1 || estrelas > 5) revert EstrelasInvalidas();
         if (t.valor < VALOR_MIN_AVALIACAO) revert ValorBaixoParaAvaliar();
         address avaliado;
-        if (msg.sender == t.cliente) {
+        if (_msgSender() == t.cliente) {
             if (t.clienteAvaliou) revert JaAvaliou();
             t.clienteAvaliou = true;
             avaliado = t.trabalhador;
-        } else if (msg.sender == t.trabalhador) {
+        } else if (_msgSender() == t.trabalhador) {
             if (t.trabalhadorAvaliou) revert JaAvaliou();
             t.trabalhadorAvaliou = true;
             avaliado = t.cliente;
@@ -576,13 +599,13 @@ contract EscrowTrabalho is ReentrancyGuard {
             revert NaoAutorizado();
         }
         Reputacao storage r = reputacao[avaliado];
-        bytes32 chave = keccak256(abi.encode(msg.sender, avaliado));
+        bytes32 chave = keccak256(abi.encode(_msgSender(), avaliado));
         uint8 anterior = _estrelasDoPar[chave];
         if (anterior == 0) ++r.avaliacoes;
         else r.somaEstrelas -= anterior;
         r.somaEstrelas += estrelas;
         _estrelasDoPar[chave] = estrelas;
-        emit Avaliacao(id, msg.sender, avaliado, estrelas);
+        emit Avaliacao(id, _msgSender(), avaliado, estrelas);
     }
 
     /// @notice Nível de reputação 0 a 5 (mesma regra usada pela carteira em escrow-client.js).
@@ -664,7 +687,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (entrega && (p.arbitroCliente != address(0) || p.desempateCriador)) revert SemDisputaNaEntrega();
         if (
             p.arbitroCliente != address(0)
-                && (p.arbitroCliente == msg.sender
+                && (p.arbitroCliente == _msgSender()
                     || (p.trabalhador != address(0) && p.arbitroCliente == p.trabalhador))
         ) revert ArbitroInvalido();
     }
@@ -673,6 +696,8 @@ contract EscrowTrabalho is ReentrancyGuard {
         Caucao storage c = _caucoes[id];
         if (c.valor == 0) return;
         c.travada = true;
+        // `entregador` é sempre `_msgSender()` de `aceitar` (quem aceitou ou assinou o aceite).
+        // forge-lint: disable-next-line(arbitrary-send-erc20)
         XBRL.safeTransferFrom(entregador, address(this), c.valor);
         emit CaucaoTravada(id, entregador, c.valor);
     }
@@ -682,6 +707,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (!c.travada) return;
         c.travada = false;
         XBRL.safeTransfer(para, c.valor);
+        // forge-lint: disable-next-line(reentrancy-events)
         emit CaucaoLiberada(id, para, c.valor);
     }
 
@@ -716,6 +742,35 @@ contract EscrowTrabalho is ReentrancyGuard {
         _registrarConclusao(t.cliente, t.trabalhador, t.valor);
         _pagar(id, t.trabalhador, restante);
         emit TrabalhoConcluido(id, t.cliente, t.trabalhador);
+        _entregarKit(id, t.trabalhador, false);
+    }
+
+    /// @notice Saca POL que não pôde ser enviado direto para a sua carteira.
+    function sacarGasPendente() external nonReentrant {
+        address quem = _msgSender();
+        uint256 v = gasPendente[quem];
+        if (v == 0) revert ValorZero();
+        gasPendente[quem] = 0;
+        // Só o próprio dono saca o que é dele (saldo zerado antes; função nonReentrant).
+        // forge-lint: disable-next-line(arbitrary-send-eth)
+        (bool ok,) = quem.call{value: v}("");
+        if (!ok) revert NaoAutorizado();
+    }
+
+    /// @dev Envia o kit (se ainda houver) com pouco gás: carteira comum recebe na hora; contrato que recusa
+    /// fica com o valor em `gasPendente` (nunca trava o trabalho). Sempre a última ação da função.
+    function _entregarKit(uint256 id, address para, bool devolvido) private {
+        uint256 v = kitGas[id];
+        if (v == 0) return;
+        kitGas[id] = 0;
+        emit KitGas(id, para, v, devolvido);
+        // Destino definido pela regra do kit (trabalhador confirmado ou cliente no cancelamento).
+        // Assembly sem copiar retorno: o destino não consegue gastar o gás do trabalho ("return bomb").
+        bool ok;
+        assembly ("memory-safe") {
+            ok := call(30000, para, v, 0, 0, 0, 0)
+        }
+        if (!ok) gasPendente[para] += v;
     }
 
     function _registrarConclusao(address a, address b, uint128 valor) private {

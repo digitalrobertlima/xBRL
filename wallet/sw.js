@@ -15,6 +15,7 @@ const ARQUIVOS = [
   "./src/keystore.js",
   "./src/gas-tank.js",
   "./src/escrow-client.js",
+  "./src/palavras-pt.js",
   "./src/vendor/ethers.umd.min.js",
 ];
 

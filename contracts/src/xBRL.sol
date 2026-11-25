@@ -12,7 +12,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///  - Sem blacklist, sem congelamento, sem pausa, sem `burnFrom` administrativo, sem proxy/upgrade.
 ///  - Só a ReservaBRL pode emitir (mint). Queimar (burn) só o próprio saldo de quem chama.
 ///  - Taxa vitalícia de 0,1% (10 bps) em transferências entre carteiras comuns, enviada ao CREATOR_TREASURY.
-///    Contratos do protocolo (Reserva, Cofre, Escrow) e o próprio Treasury são isentos, para não quebrar
+///    Contratos do protocolo (Reserva e Escrow) e o próprio Treasury são isentos, para não quebrar
 ///    a contabilidade deles; Reserva e Escrow cobram a mesma taxa de 0,1% explicitamente.
 ///  - A lista de isentos é gravada uma única vez em `inicializar` e fica imutável para sempre.
 contract xBRL is ERC20, ERC20Permit {

@@ -37,9 +37,5 @@ runs = 2048
 polygon = "${POLYGON_RPC_URL}"
 amoy = "${AMOY_RPC_URL}"
 
-[etherscan]
-polygon = { key = "${POLYGONSCAN_API_KEY}", chain = 137 }
-amoy = { key = "${POLYGONSCAN_API_KEY}", chain = 80002 }
-
 [fmt]
 line_length = 110

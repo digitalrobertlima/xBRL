@@ -7,7 +7,7 @@
 
 | Pasta | O que tem |
 |---|---|
-| `contracts/` | Foundry: `xBRL`, `ReservaBRL`, `CofreRendimento`, `EscrowTrabalho`, script de deploy determinístico e 72 testes |
+| `contracts/` | Foundry: `xBRL`, `ReservaBRL`, `EscrowTrabalho`, script de deploy determinístico e 60 testes |
 | `wallet/` | Carteira nativa 100% estática (BIP-39 + AES-256-GCM + WebAuthn PRF, tanque de gás, marketplace) |
 | `index.html` | Landing page institucional |
 | `CLAUDE.md` | Manual técnico fixo: invariantes, endereços, identidade visual, comandos |

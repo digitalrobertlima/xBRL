@@ -3,10 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {xBRL} from "../src/xBRL.sol";
 import {ReservaBRL} from "../src/ReservaBRL.sol";
-import {CofreRendimento} from "../src/CofreRendimento.sol";
 import {EscrowTrabalho} from "../src/EscrowTrabalho.sol";
 
 /// @notice Stablecoin de Real SÓ PARA TESTNET (Amoy/local), com torneira pública.
@@ -31,7 +29,8 @@ contract BRLTeste is ERC20 {
 /// @notice Uso (a chave NUNCA fica em arquivo — importe com `cast wallet import xbrl-deployer --interactive`):
 ///   forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url amoy    --account xbrl-deployer --broadcast --verify
 ///   forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url polygon --account xbrl-deployer --broadcast --verify
-/// Mesmo deployer + mesmo SALT = mesmos endereços de xBRL, Cofre e Escrow em qualquer rede.
+/// Mesmo deployer + mesmo SALT = mesmos endereços de xBRL e Escrow em qualquer rede.
+/// O dono da Reserva é o CREATOR_TREASURY desde o construtor: a chave de deploy é descartável.
 /// Reexecutar é seguro: contratos já existentes são reaproveitados e a inicialização só ocorre uma vez.
 /// Ao final grava `wallet/src/deployments/<chainId>.json`, lido pela carteira e pela landing page.
 contract DeployPolygon is Script {
@@ -48,7 +47,6 @@ contract DeployPolygon is Script {
     struct Implantacao {
         address token;
         address reserva;
-        address cofre;
         address escrow;
         address[] lastros;
         address deployer;
@@ -63,15 +61,14 @@ contract DeployPolygon is Script {
         imp.lastros = _lastros();
         imp.token = _criar(type(xBRL).creationCode, abi.encode(CREATOR_TREASURY, imp.deployer));
         imp.reserva = _criar(
-            type(ReservaBRL).creationCode, abi.encode(imp.token, CREATOR_TREASURY, imp.lastros, imp.deployer)
+            type(ReservaBRL).creationCode,
+            abi.encode(imp.token, CREATOR_TREASURY, imp.lastros, CREATOR_TREASURY)
         );
-        imp.cofre = _criar(type(CofreRendimento).creationCode, abi.encode(IERC20(imp.token)));
         imp.escrow = _criar(type(EscrowTrabalho).creationCode, abi.encode(imp.token, CREATOR_TREASURY));
 
         if (!xBRL(imp.token).inicializado()) {
-            address[] memory isentos = new address[](2);
-            isentos[0] = imp.cofre;
-            isentos[1] = imp.escrow;
+            address[] memory isentos = new address[](1);
+            isentos[0] = imp.escrow;
             xBRL(imp.token).inicializar(imp.reserva, isentos);
         }
         vm.stopBroadcast();
@@ -108,10 +105,10 @@ contract DeployPolygon is Script {
     function _validar(Implantacao memory imp) internal view {
         xBRL t = xBRL(imp.token);
         require(t.reserva() == imp.reserva, "reserva nao conectada");
-        require(t.isentoDeTaxa(imp.cofre) && t.isentoDeTaxa(imp.escrow), "isencoes ausentes");
+        require(t.isentoDeTaxa(imp.escrow), "isencao ausente");
         require(t.CREATOR_TREASURY() == CREATOR_TREASURY, "treasury divergente");
         require(address(ReservaBRL(imp.reserva).XBRL()) == imp.token, "reserva com token errado");
-        require(CofreRendimento(imp.cofre).asset() == imp.token, "cofre com ativo errado");
+        require(ReservaBRL(imp.reserva).owner() == CREATOR_TREASURY, "dono da reserva divergente");
         require(address(EscrowTrabalho(imp.escrow).XBRL()) == imp.token, "escrow com token errado");
     }
 
@@ -119,7 +116,6 @@ contract DeployPolygon is Script {
         console2.log("chainId", block.chainid);
         console2.log("xBRL", imp.token);
         console2.log("ReservaBRL", imp.reserva);
-        console2.log("CofreRendimento", imp.cofre);
         console2.log("EscrowTrabalho", imp.escrow);
         if (!vm.envOr("XBRL_GRAVAR_JSON", true)) return;
 
@@ -130,7 +126,6 @@ contract DeployPolygon is Script {
         vm.serializeAddress(k, "treasury", CREATOR_TREASURY);
         vm.serializeAddress(k, "xBRL", imp.token);
         vm.serializeAddress(k, "ReservaBRL", imp.reserva);
-        vm.serializeAddress(k, "CofreRendimento", imp.cofre);
         vm.serializeAddress(k, "EscrowTrabalho", imp.escrow);
         string memory json = vm.serializeAddress(k, "lastros", imp.lastros);
         string memory caminho = string.concat(

@@ -4,9 +4,10 @@
 // e calcula a reputação Nível 0 a 5 com a MESMA regra do contrato (EscrowTrabalho.nivel).
 // =====================================================================
 import { ABIS, ESCROW } from "./config.js";
+import { PALAVRAS } from "./palavras-pt.js";
 
 const e = () => globalThis.ethers;
-const ALFABETO = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // sem 0/O, 1/I/L — fácil de ditar
+export const PALAVRAS_CODIGO = 5; // 5 × 11 bits = 55 bits de segredo
 
 // --------------------------- Reputação ---------------------------
 
@@ -58,17 +59,26 @@ export function lerGps({ timeout = 20_000 } = {}) {
 
 // --------------------------- Código de entrega ---------------------------
 
-/** 12 caracteres (~59 bits), formato XXXX-XXXX-XXXX. */
+/** Código de entrega: 5 palavras portuguesas da lista BIP-39 (~55 bits), fáceis de ditar. */
 export function gerarCodigoEntrega() {
-  const bytes = crypto.getRandomValues(new Uint8Array(12));
-  let s = "";
-  for (let i = 0; i < 12; i++) s += ALFABETO[bytes[i] % ALFABETO.length];
-  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
+  const n = new Uint16Array(PALAVRAS_CODIGO);
+  crypto.getRandomValues(n);
+  return [...n].map((x) => PALAVRAS[x % 2048]).join(" ");
 }
 
+/** Aceita maiúsculas, acentos, hífens e espaços extras: "Abacate-BOLSA  canela…" → "abacate bolsa canela…". */
 export function normalizarCodigo(c) {
-  const s = String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return s.length === 12 ? `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}` : String(c || "").trim();
+  return String(c || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z]+/g, " ")
+    .trim();
+}
+
+export function codigoTemFormatoValido(c) {
+  const p = normalizarCodigo(c).split(" ");
+  return p.length === PALAVRAS_CODIGO && p.every((w) => PALAVRAS.includes(w));
 }
 
 /** keccak256(abi.encode(escrow, cliente, codigo)) — igual a EscrowTrabalho.hashCodigo. */

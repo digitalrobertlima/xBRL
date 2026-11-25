@@ -1,0 +1,128 @@
+name: Deploy dos contratos (automático)
+
+# Roda o deploy determinístico na Polygon (ou Amoy) usando a chave descartável guardada no
+# segredo DEPLOYER_PRIVATE_KEY. Espera a carteira de deploy receber POL, implanta, verifica o
+# código no Sourcify, grava wallet/src/deployments/<chainId>.json na main, republica o site e
+# devolve o POL que sobrar para o CREATOR_TREASURY. A chave não tem nenhum poder depois do deploy:
+# o dono da Reserva é o CREATOR_TREASURY desde o construtor.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rede:
+        description: "Rede"
+        type: choice
+        options: [polygon, amoy]
+        default: polygon
+      saldo_minimo_pol:
+        description: "Começa quando a carteira de deploy tiver pelo menos este saldo (POL)"
+        default: "2"
+      espera_max_minutos:
+        description: "Quanto tempo esperar o saldo chegar (máx. 340)"
+        default: "340"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: deploy-${{ inputs.rede }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      CHAVE: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+      TREASURY: "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1"
+      FABRICA: "0x4e59b44847b379578588920cA78FbF26c0B4956C"
+      POLYGON_RPC_URL: https://polygon-bor-rpc.publicnode.com
+      AMOY_RPC_URL: https://polygon-amoy-bor-rpc.publicnode.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Preparar rede
+        run: |
+          test -n "$CHAVE" || { echo "::error::Segredo DEPLOYER_PRIVATE_KEY ausente"; exit 1; }
+          if [ "${{ inputs.rede }}" = "polygon" ]; then
+            echo "RPC=$POLYGON_RPC_URL" >> "$GITHUB_ENV"; echo "CHAIN=137" >> "$GITHUB_ENV"; echo "GORJETA=40gwei" >> "$GITHUB_ENV"
+          else
+            echo "RPC=$AMOY_RPC_URL" >> "$GITHUB_ENV"; echo "CHAIN=80002" >> "$GITHUB_ENV"; echo "GORJETA=30gwei" >> "$GITHUB_ENV"
+          fi
+          echo "DEPLOYER=$(cast wallet address "$CHAVE")" >> "$GITHUB_ENV"
+
+      - name: Pré-checagem on-chain
+        run: |
+          echo "Carteira de deploy: $DEPLOYER"
+          test "$(cast chain-id --rpc-url "$RPC")" = "$CHAIN" || { echo "::error::RPC na rede errada"; exit 1; }
+          test "$(cast code "$FABRICA" --rpc-url "$RPC")" != "0x" || { echo "::error::Fábrica CREATE2 ausente"; exit 1; }
+          if [ "$CHAIN" = "137" ]; then
+            for t in 0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc 0xE6A537a407488807F0bbeb0038B79004f19DDDFb; do
+              d=$(cast call "$t" "decimals()(uint8)" --rpc-url "$RPC"); s=$(cast call "$t" "symbol()(string)" --rpc-url "$RPC")
+              echo "Lastro $t = $s ($d casas)"; test "$d" = "18" || { echo "::error::Lastro com casas inesperadas"; exit 1; }
+            done
+          fi
+
+      - name: Testes antes de implantar
+        working-directory: contracts
+        run: forge test
+
+      - name: Aguardar POL na carteira de deploy
+        run: |
+          minimo=$(cast to-wei "${{ inputs.saldo_minimo_pol }}")
+          limite=$(( $(date +%s) + ${{ inputs.espera_max_minutos }} * 60 ))
+          while true; do
+            saldo=$(cast balance "$DEPLOYER" --rpc-url "$RPC" || echo 0)
+            echo "$(date -u +%H:%M:%S) saldo: $(cast from-wei "$saldo") POL (precisa ${{ inputs.saldo_minimo_pol }})"
+            if [ "$(echo "$saldo >= $minimo" | bc)" = "1" ]; then break; fi
+            if [ "$(date +%s)" -ge "$limite" ]; then echo "::error::Saldo não chegou a tempo. Envie POL para $DEPLOYER e rode de novo."; exit 1; fi
+            sleep 60
+          done
+
+      - name: Implantar (CREATE2 determinístico)
+        working-directory: contracts
+        run: |
+          forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url "$RPC" --private-key "$CHAVE" \
+            --broadcast --slow --priority-gas-price "$GORJETA"
+          cat "../wallet/src/deployments/$CHAIN.json"
+
+      - name: Verificar código-fonte (Sourcify)
+        continue-on-error: true
+        working-directory: contracts
+        run: |
+          forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url "$RPC" --private-key "$CHAVE" \
+            --resume --verify --verifier sourcify
+
+      - name: Gravar endereços na main
+        run: |
+          git config user.name "xbrl-deploy[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "wallet/src/deployments/$CHAIN.json"
+          git commit -m "Deploy ${{ inputs.rede }}: endereços do protocolo (chainId $CHAIN)" || echo "Nada novo"
+          git pull --rebase origin main && git push origin HEAD:main
+
+      - name: Republicar o site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci-deploy.yml --ref main
+
+      - name: Devolver o POL que sobrou ao CREATOR_TREASURY
+        if: always() && inputs.rede == 'polygon'
+        continue-on-error: true
+        run: |
+          saldo=$(cast balance "$DEPLOYER" --rpc-url "$RPC")
+          preco=$(cast gas-price --rpc-url "$RPC")
+          custo=$(echo "21000 * ($preco * 2 + 40000000000)" | bc)
+          if [ "$(echo "$saldo > $custo" | bc)" = "1" ]; then
+            valor=$(echo "$saldo - $custo" | bc)
+            cast send "$TREASURY" --value "$valor" --private-key "$CHAVE" --rpc-url "$RPC" \
+              --gas-limit 21000 --gas-price "$(echo "$preco * 2 + 40000000000" | bc)"
+            echo "Devolvido: $(cast from-wei "$valor") POL"
+          fi

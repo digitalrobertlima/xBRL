@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#03231A">
   <meta name="color-scheme" content="dark">
   <title>xBRL — O Real Soberano & Inconfiscável na Polygon</title>
-  <meta name="description" content="xBRL é um Real digital 1:1, lastreado em stablecoins de Real, sem congelamento nem confisco. Carteira própria, cofre com rendimento de receita real e marketplace de trabalho sem intermediário.">
+  <meta name="description" content="xBRL é um Real digital 1:1, lastreado em stablecoins de Real, sem congelamento nem confisco. Carteira própria e marketplace de trabalho sem intermediário.">
   <meta property="og:title" content="xBRL — O Real Soberano & Inconfiscável">
   <meta property="og:description" content="1 xBRL = R$ 1. Lastro 100% verificável na Polygon. Ninguém congela, ninguém confisca.">
   <meta property="og:image" content="wallet/icons/icon-512.png">
@@ -89,7 +89,7 @@
 <header>
   <div class="wrap">
     <a class="marca" href="#"><img src="wallet/icons/icon-192.png" alt=""><span>x<b>BRL</b></span></a>
-    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#cofre">Cofre</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
+    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
     <a class="cta ouro" href="wallet/">Abrir carteira</a>
   </div>
 </header>
@@ -117,11 +117,10 @@
 
   <section id="como">
     <h2>Como funciona</h2>
-    <p class="sub">Quatro contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
-    <div class="grade quatro">
+    <p class="sub">Três contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
+    <div class="grade">
       <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
       <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega BRZ ou BRLA e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
-      <div class="card"><div class="ic">🏦</div><h3>Cofre</h3><p>Guarde xBRL e receba sua parte da receita real depositada por comércios parceiros. Até 17% ao ano.</p></div>
       <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. GPS, código de entrega e reputação pública.</p></div>
     </div>
   </section>
@@ -137,23 +136,12 @@
     </div>
   </section>
 
-  <section id="cofre">
-    <h2>Cofre de Rendimento</h2>
-    <p class="sub">Um cofre ERC-4626 que não imprime rendimento. O que você ganha é receita de verdade — de comércios como a Pastelândia — distribuída devagar entre quem guardou.</p>
-    <div class="grade">
-      <div class="card ouro"><div class="ic">📈</div><h3>Até 17% ao ano</h3><p>Teto rígido no contrato. Receita acima do teto fica na fila e paga os meses seguintes.</p></div>
-      <div class="card"><div class="ic">🧾</div><h3>Origem pública</h3><p>Cada depósito de receita fica registrado na blockchain com quem pagou e uma referência.</p></div>
-      <div class="card"><div class="ic">🚪</div><h3>Saída livre</h3><p>Sem carência, sem taxa de entrada ou saída. Saque a qualquer hora.</p></div>
-    </div>
-    <p class="aviso" style="margin-top:18px">Sem receita depositada, o rendimento é 0%. Rendimento passado não garante rendimento futuro. Isto não é aplicação financeira garantida pelo FGC.</p>
-  </section>
-
   <section id="trabalho">
     <h2>Marketplace de trabalho, sem intermediário</h2>
     <p class="sub">O cliente trava o pagamento no contrato. O trabalhador recebe quando a regra da modalidade é cumprida. Taxa de 0,1% só no pagamento.</p>
     <div class="grade quatro">
       <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>Check-in GPS a até 80 m do local. Libera pelo aceite, pelo código ou em 3 dias sem contestação.</p></div>
-      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>GPS no destino + código secreto que só o destinatário tem. Código certo = pagamento na hora.</p></div>
+      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>GPS no destino + código secreto de 5 palavras que só o destinatário tem. Código certo = pagamento na hora.</p></div>
       <div class="card"><div class="ic">💻</div><h3>Remoto</h3><p>Trabalhador marca entregue; cliente aprova ou, depois de 3 dias de silêncio, o valor é liberado.</p></div>
       <div class="card"><div class="ic">🧱</div><h3>Por etapas</h3><p>De 2 a 50 parcelas iguais, cada uma com a mesma regra do remoto.</p></div>
     </div>
@@ -194,15 +182,15 @@
     <h2>Perguntas frequentes</h2>
     <details><summary>xBRL é dinheiro de verdade?</summary><p>É um token que vale R$ 1 porque cada unidade é lastreada por R$ 1 em stablecoins de Real (BRZ, BRLA) guardadas no contrato da Reserva, e pode ser resgatada por elas a qualquer momento.</p></details>
     <details><summary>Preciso de cadastro?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para trocar reais por BRZ/BRLA você usa a corretora ou o emissor de sua preferência.</p></details>
-    <details><summary>De onde vem o rendimento do cofre?</summary><p>De receita real depositada por comércios e parceiros. O contrato limita a distribuição a 17% ao ano. Sem receita, não há rendimento.</p></details>
-    <details><summary>Quanto custa?</summary><p>0,1% por transferência entre carteiras, emissão, resgate ou pagamento de trabalho. Guardar no cofre e sacar não paga taxa. A rede Polygon cobra centavos de POL por operação.</p></details>
+    <details><summary>xBRL rende juros?</summary><p>Não. xBRL não promete nem paga rendimento. Ele é um Real digital que você controla sozinho.</p></details>
+    <details><summary>Quanto custa?</summary><p>0,1% por transferência entre carteiras, emissão, resgate ou pagamento de trabalho. A rede Polygon cobra centavos de POL por operação.</p></details>
     <details><summary>E se o site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby…).</p></details>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <p><b>xBRL</b> — O Real Soberano &amp; Inconfiscável na Rede Polygon. Software livre, sem garantias. Não é instituição financeira, não é investimento garantido pelo FGC e não é recomendação de investimento. Use por sua conta e risco.</p>
+    <p><b>xBRL</b> — O Real Soberano &amp; Inconfiscável na Rede Polygon. Software livre, sem garantias. Não é instituição financeira, não é investimento, não paga rendimento e não tem garantia do FGC. Use por sua conta e risco.</p>
     <p><a href="wallet/">Carteira</a> · <a href="https://github.com/digitalrobertlima/xBRL" rel="noopener">Código-fonte</a></p>
   </div>
 </footer>
@@ -210,7 +198,7 @@
 <script>
   (async () => {
     const redes = [[137, "Polygon PoS", "https://polygonscan.com"], [80002, "Polygon Amoy (teste)", "https://amoy.polygonscan.com"]];
-    const nomes = ["xBRL", "ReservaBRL", "CofreRendimento", "EscrowTrabalho"];
+    const nomes = ["xBRL", "ReservaBRL", "EscrowTrabalho"];
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     let html = "<table><thead><tr><th>Contrato</th>" + redes.map((r) => `<th>${r[1]}</th>`).join("") + "</tr></thead><tbody>";
     const dados = await Promise.all(redes.map(([id]) => fetch(`wallet/src/deployments/${id}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));

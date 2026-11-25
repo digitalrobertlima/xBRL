@@ -3,10 +3,8 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {xBRL} from "../src/xBRL.sol";
 import {ReservaBRL} from "../src/ReservaBRL.sol";
-import {CofreRendimento} from "../src/CofreRendimento.sol";
 import {EscrowTrabalho} from "../src/EscrowTrabalho.sol";
 import {DeployPolygon} from "../script/DeployPolygon.s.sol";
 
@@ -58,7 +56,6 @@ abstract contract Base is Test {
 
     xBRL internal token;
     ReservaBRL internal reserva;
-    CofreRendimento internal cofre;
     EscrowTrabalho internal escrow;
     MockBRL internal brz; // 18 casas
     MockBRL internal brla; // 6 casas (testa normalização)
@@ -83,11 +80,9 @@ abstract contract Base is Test {
         lastros[0] = address(brz);
         lastros[1] = address(brla);
         reserva = new ReservaBRL(address(token), TREASURY, lastros, dono);
-        cofre = new CofreRendimento(IERC20(address(token)));
         escrow = new EscrowTrabalho(address(token), TREASURY);
-        address[] memory isentos = new address[](2);
-        isentos[0] = address(cofre);
-        isentos[1] = address(escrow);
+        address[] memory isentos = new address[](1);
+        isentos[0] = address(escrow);
         token.inicializar(address(reserva), isentos);
     }
 
@@ -126,7 +121,6 @@ contract XBRLTokenTest is Base {
         assertEq(token.TAXA_BPS(), 10);
         assertEq(token.reserva(), address(reserva));
         assertTrue(token.inicializado());
-        assertTrue(token.isentoDeTaxa(address(cofre)));
         assertTrue(token.isentoDeTaxa(address(escrow)));
         assertTrue(token.isentoDeTaxa(address(reserva)));
         assertTrue(token.isentoDeTaxa(TREASURY));
@@ -190,7 +184,7 @@ contract XBRLTokenTest is Base {
         (uint256 liquido, uint256 taxa) = token.previewTransferencia(alice, bob, valor);
         assertEq(liquido + taxa, valor);
         assertEq(taxa, (valor * 10) / 10_000);
-        (liquido, taxa) = token.previewTransferencia(alice, address(cofre), valor);
+        (liquido, taxa) = token.previewTransferencia(alice, address(escrow), valor);
         assertEq(taxa, 0);
         assertEq(liquido, valor);
     }
@@ -681,149 +675,6 @@ contract ReservaInvarianteTest is Base {
 }
 
 // =====================================================================
-// CofreRendimento
-// =====================================================================
-
-contract CofreRendimentoTest is Base {
-    function setUp() public override {
-        super.setUp();
-        _emitirBrz(alice, 100_000e18);
-        _emitirBrz(carol, 100_000e18); // carol = comércio que deposita receita
-        _emitirBrz(bob, 100_000e18);
-    }
-
-    function _depositar(address quem, uint256 v) internal returns (uint256 cotas) {
-        vm.startPrank(quem);
-        token.approve(address(cofre), v);
-        cotas = cofre.deposit(v, quem);
-        vm.stopPrank();
-    }
-
-    function _receita(uint256 v) internal {
-        vm.startPrank(carol);
-        token.approve(address(cofre), v);
-        cofre.depositarReceita(v, unicode"Pastelândia — faturamento");
-        vm.stopPrank();
-    }
-
-    function test_DepositoESaqueSemTaxa() public {
-        uint256 saldo = token.balanceOf(alice);
-        uint256 cotas = _depositar(alice, 1_000e18);
-        assertEq(token.balanceOf(address(cofre)), 1_000e18, "cofre recebe integral");
-        assertEq(cofre.convertToAssets(cotas), 1_000e18);
-        vm.prank(alice);
-        cofre.redeem(cotas, alice, alice);
-        assertEq(token.balanceOf(alice), saldo);
-    }
-
-    function test_SemReceitaSemRendimento() public {
-        uint256 cotas = _depositar(alice, 1_000e18);
-        vm.warp(block.timestamp + 365 days);
-        assertEq(cofre.convertToAssets(cotas), 1_000e18);
-        assertEq(cofre.taxaAtualBps(), 0);
-    }
-
-    function test_TetoDe17PorCentoAoAno() public {
-        uint256 cotas = _depositar(alice, 10_000e18);
-        _receita(50_000e18); // receita enorme: o teto manda
-        for (uint256 i = 0; i < 365; ++i) {
-            vm.warp(block.timestamp + 1 days);
-            cofre.acumular();
-        }
-        uint256 valor = cofre.convertToAssets(cotas);
-        assertLe(valor, 11_700e18, "nunca passa de 17% a.a.");
-        assertGe(valor, 11_690e18, "chega perto do teto quando ha receita");
-        assertGt(cofre.receitaPendente(), 0, "excedente segue na fila");
-    }
-
-    function test_LiberacaoSemInteracaoRespeitaTeto() public {
-        uint256 cotas = _depositar(alice, 10_000e18);
-        _receita(50_000e18);
-        vm.warp(block.timestamp + 365 days);
-        assertEq(cofre.convertToAssets(cotas), 11_570e18 - 1); // 15,70% linear sem capitalizar
-    }
-
-    function test_ReceitaPequenaTotalmenteDistribuida() public {
-        uint256 cotas = _depositar(alice, 1_000e18);
-        _receita(10e18);
-        assertEq(cofre.taxaAtualBps(), 1_570);
-        vm.warp(block.timestamp + 30 days); // teto de 30 dias ≈ 12,9 > 10
-        assertApproxEqAbs(cofre.convertToAssets(cotas), 1_010e18, 1);
-        cofre.acumular();
-        assertEq(cofre.receitaPendente(), 0);
-        assertEq(cofre.receitaTotalRecebida(), 10e18);
-    }
-
-    function test_TaxaAtualProporcionalQuandoFilaCurta() public {
-        _depositar(alice, 10_000e18);
-        // 1 dia no teto = 10.000 * 0,157 / 365 ≈ 4,30; fila de ~2,15 → metade da taxa
-        _receita(2.150684931506849315e18);
-        assertApproxEqAbs(cofre.taxaAtualBps(), 785, 1);
-    }
-
-    function test_AntiSanduiche() public {
-        _depositar(alice, 10_000e18);
-        uint256 cotasBob = _depositar(bob, 10_000e18);
-        _receita(5_000e18);
-        vm.warp(block.timestamp + 12);
-        vm.prank(bob);
-        uint256 recebido = cofre.redeem(cotasBob, bob, bob);
-        assertLt(recebido, 10_000e18 + 1e15, "nao captura a receita de uma vez");
-    }
-
-    function test_DivisaoJustaEntreCotistas() public {
-        uint256 ca = _depositar(alice, 3_000e18);
-        uint256 cb = _depositar(bob, 1_000e18);
-        _receita(40e18);
-        vm.warp(block.timestamp + 60 days);
-        uint256 ga = cofre.convertToAssets(ca) - 3_000e18;
-        uint256 gb = cofre.convertToAssets(cb) - 1_000e18;
-        assertApproxEqRel(ga, gb * 3, 1e12);
-        assertApproxEqAbs(ga + gb, 40e18, 2);
-    }
-
-    function test_ReceitaSemCotistasFicaNaFila() public {
-        _receita(100e18);
-        vm.warp(block.timestamp + 30 days);
-        assertEq(cofre.liberavelAgora(), 0);
-        uint256 cotas = _depositar(alice, 1_000e18);
-        assertEq(cofre.convertToAssets(cotas), 1_000e18);
-        vm.warp(block.timestamp + 365 days);
-        assertApproxEqAbs(cofre.convertToAssets(cotas), 1_100e18, 1);
-    }
-
-    function test_AtaqueDeInflacaoMitigado() public {
-        address atacante = makeAddr("atacante");
-        _emitirBrz(atacante, 20_000e18);
-        vm.startPrank(atacante);
-        token.approve(address(cofre), 1);
-        cofre.deposit(1, atacante);
-        assertTrue(token.transfer(address(cofre), 10_000e18)); // doação direta (paga 0,1% de taxa? não: cofre é isento)
-        vm.stopPrank();
-        uint256 cotas = _depositar(alice, 1_000e18);
-        assertGt(cotas, 0);
-        assertGe(cofre.convertToAssets(cotas), 999e18);
-    }
-
-    function test_ReceitaZeroReverte() public {
-        vm.expectRevert(CofreRendimento.ValorZero.selector);
-        cofre.depositarReceita(0, "");
-    }
-
-    function testFuzz_SaqueNuncaPassaDoDireito(uint96 dep, uint96 rec, uint32 tempo) public {
-        uint256 d = bound(uint256(dep), 1e18, 50_000e18);
-        uint256 r = bound(uint256(rec), 1, 50_000e18);
-        uint256 cotas = _depositar(alice, d);
-        _receita(r);
-        vm.warp(block.timestamp + bound(uint256(tempo), 0, 3 * 365 days));
-        vm.prank(alice);
-        uint256 recebido = cofre.redeem(cotas, alice, alice);
-        assertLe(recebido, d + r);
-        assertGe(recebido + 1, d);
-    }
-}
-
-// =====================================================================
 // EscrowTrabalho
 // =====================================================================
 
@@ -1246,7 +1097,7 @@ contract IntegracaoTest is Base {
         // 2) Contrata entrega com código; bob entrega e recebe
         vm.startPrank(carol);
         token.approve(address(escrow), type(uint256).max);
-        bytes32 h = escrow.hashCodigo(carol, "PAST-ELAN-DIA1");
+        bytes32 h = escrow.hashCodigo(carol, "pastel feira moeda tigela viola");
         uint256 id = escrow.criarTrabalho(
             EscrowTrabalho.NovoTrabalho({
                 modalidade: EscrowTrabalho.Modalidade.Entrega,
@@ -1264,33 +1115,18 @@ contract IntegracaoTest is Base {
         vm.startPrank(bob);
         escrow.aceitar(id);
         escrow.checkIn(id, LAT + 10, LON - 10);
-        escrow.confirmarComCodigo(id, "PAST-ELAN-DIA1");
+        escrow.confirmarComCodigo(id, "pastel feira moeda tigela viola");
         assertEq(token.balanceOf(bob), 999e18);
 
-        // 3) bob poupa no cofre
-        token.approve(address(cofre), 999e18);
-        uint256 cotas = cofre.deposit(999e18, bob);
-        vm.stopPrank();
-
-        // 4) carol deposita receita real do comércio
-        vm.startPrank(carol);
-        token.approve(address(cofre), 10e18);
-        cofre.depositarReceita(10e18, "Receita de novembro");
-        vm.stopPrank();
-        vm.warp(block.timestamp + 30 days);
-
-        // 5) bob saca com rendimento e resgata BRZ
-        vm.startPrank(bob);
-        uint256 total = cofre.redeem(cotas, bob, bob);
-        assertApproxEqAbs(total, 1_009e18, 2);
-        token.approve(address(reserva), total);
-        uint256 pago = reserva.resgatar(address(brz), total, 0);
+        // 3) bob resgata o pagamento em BRZ
+        token.approve(address(reserva), 999e18);
+        uint256 pago = reserva.resgatar(address(brz), 999e18, 0);
         vm.stopPrank();
         assertEq(brz.balanceOf(bob), pago);
-        assertApproxEqAbs(pago, (total * 9_990) / 10_000, 1);
+        assertEq(pago, 998.001e18);
 
-        // Treasury recebeu: 2 (emissão) + 1 (escrow) + ~1,009 (resgate)
-        assertApproxEqAbs(token.balanceOf(TREASURY), 2e18 + 1e18 + (total * 10) / 10_000, 1);
+        // Treasury recebeu: 2 (emissão) + 1 (escrow) + 0,999 (resgate)
+        assertEq(token.balanceOf(TREASURY), 2e18 + 1e18 + 0.999e18);
         _lastroCobreSupply();
     }
 }
@@ -1312,14 +1148,12 @@ contract DeployScriptTest is Test {
         assertTrue(xBRL(a.token).inicializado());
         assertEq(xBRL(a.token).reserva(), a.reserva);
         assertEq(a.lastros.length, 1);
-        assertEq(ReservaBRL(a.reserva).owner(), a.deployer);
-        assertEq(CofreRendimento(a.cofre).asset(), a.token);
+        assertEq(ReservaBRL(a.reserva).owner(), 0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1);
 
         // Reexecução: mesmos endereços, nada quebra
         DeployPolygon.Implantacao memory b = s.run();
         assertEq(a.token, b.token);
         assertEq(a.reserva, b.reserva);
-        assertEq(a.cofre, b.cofre);
         assertEq(a.escrow, b.escrow);
     }
 

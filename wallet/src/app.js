@@ -8,7 +8,7 @@
 import { ABIS, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
 import * as K from "./keystore.js";
 import * as G from "./gas-tank.js";
-import { EscrowClient, NOMES_NIVEL, codigoGuardado, distanciaMetros, gerarCodigoEntrega, guardarCodigo, hashCodigo, lerGps, normalizarCodigo, paraMicro } from "./escrow-client.js";
+import { EscrowClient, NOMES_NIVEL, codigoGuardado, codigoTemFormatoValido, distanciaMetros, gerarCodigoEntrega, guardarCodigo, hashCodigo, lerGps, normalizarCodigo, paraMicro } from "./escrow-client.js";
 
 const E = globalThis.ethers;
 const $ = (s, r = document) => r.querySelector(s);
@@ -39,7 +39,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR"],
@@ -512,7 +512,7 @@ TELAS.INICIO = async () => {
       <button class="atalho" data-ir="ENVIAR"><span>📤</span>Enviar</button>
       <button class="atalho" data-ir="RECEBER"><span>📥</span>Receber</button>
       <button class="atalho" data-ir="RESERVA"><span>🪙</span>Comprar</button>
-      <button class="atalho" data-ir="COFRE"><span>🏦</span>Render</button>
+      <button class="atalho" data-acao="modo-resgatar"><span>💵</span>Resgatar</button>
       <button class="atalho" data-ir="TRABALHOS"><span>🤝</span>Trabalhos</button>
       <button class="atalho" data-ir="TANQUE"><span>⛽</span>Tanque</button>
     </div>
@@ -616,46 +616,6 @@ TELAS.RESERVA = async () => {
   $("#res-lastro").addEventListener("change", cotar);
 };
 
-/** Taxa contínua (bps) → efetiva ao ano (%). */
-const efetivaAno = (bps) => (Math.exp(Number(bps) / 10_000) - 1) * 100;
-
-TELAS.COFRE = async () => {
-  if (!S.imp) return tela(`<h1>Cofre</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
-  const k = c("CofreRendimento");
-  const [cotas, ta, pendente, recebida, taxa, saldoX] = await Promise.all([
-    k.balanceOf(S.endereco), k.totalAssets(), k.receitaPendente(), k.receitaTotalRecebida(), k.taxaAtualBps(), c("xBRL").balanceOf(S.endereco),
-  ]);
-  const meu = await k.convertToAssets(cotas);
-  const modo = S.params.modo || "depositar";
-  tela(`
-    <h1>Cofre de Rendimento</h1>
-    <div class="cartao ouro">
-      <p class="mudo">Seu saldo no cofre</p>
-      <div class="saldo">${fmt(meu)}<small>xBRL</small></div>
-      <p>Rendendo agora: <b>${efetivaAno(taxa).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% a.a.</b> <span class="selo">teto 17% a.a.</span></p>
-    </div>
-    <div class="cartao">
-      <div class="linha"><span>Total no cofre</span><b>${fmt(ta)} xBRL</b></div>
-      <div class="linha"><span>Receita real na fila</span><b>${fmt(pendente)} xBRL</b></div>
-      <div class="linha"><span>Receita real já recebida</span><b>${fmt(recebida)} xBRL</b></div>
-    </div>
-    <div class="aviso">O rendimento vem só de receita real depositada por comércios e parceiros. Sem receita, rende 0%. Não é garantido. Saque quando quiser, sem taxa.</div>
-    <div class="seg" role="group" aria-label="Operação">
-      <button data-acao="modo-depositar" aria-pressed="${modo === "depositar"}">Guardar</button>
-      <button data-acao="modo-sacar" aria-pressed="${modo === "sacar"}">Sacar</button>
-    </div>
-    <label for="cof-valor">Valor em xBRL ${modo === "depositar" ? `(disponível ${fmt(saldoX)})` : `(no cofre ${fmt(meu)})`}</label>
-    <input id="cof-valor" class="grande" inputmode="decimal" placeholder="0,00">
-    <button class="btn sec" data-acao="cof-tudo">Usar tudo</button>
-    ${botaoSegurar(modo === "depositar" ? "guardar" : "sacar", "cofre")}
-    <details class="cartao"><summary>Sou comércio: depositar receita para os cotistas</summary>
-      <label for="rec-valor">Receita em xBRL</label><input id="rec-valor" inputmode="decimal" placeholder="0,00">
-      <label for="rec-ref">Referência pública</label><input id="rec-ref" maxlength="80" placeholder="Ex.: Pastelândia — novembro">
-      ${botaoSegurar("depositar receita", "receita")}
-    </details>`);
-  S.params.saldos = { saldoX, meu, cotas };
-};
-
 TELAS.TANQUE = async () => {
   const est = await G.estadoTanque(S.provider, S.endereco);
   const temSwap = !!S.rede.uniswap;
@@ -727,7 +687,7 @@ TELAS.TRABALHO_NOVO = () => {
       <label>Local ${m === 1 ? "de entrega" : "do serviço"}</label>
       <button class="btn sec" data-acao="tn-gps">📍 Usar minha localização atual</button>
       <div class="grade duas"><input id="tn-lat" inputmode="decimal" placeholder="Latitude (-19.932)" aria-label="Latitude"><input id="tn-lon" inputmode="decimal" placeholder="Longitude (-43.938)" aria-label="Longitude"></div>` : ""}
-    ${m === 1 ? `<div class="ok">Um código de entrega será gerado. Passe-o só para quem vai receber.</div>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
+    ${m === 1 ? `<div class="ok">Um código de 5 palavras será gerado. Passe-o só para quem vai receber.</div>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
     ${botaoSegurar("travar o pagamento", "criar-trabalho")}
     <p class="mudo">O valor fica travado no contrato, não com a gente. Taxa de 0,1% só quando o trabalhador recebe.</p>`);
 };
@@ -762,7 +722,7 @@ TELAS.TRABALHO = async () => {
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
     </div>
     ${codigo ? `<p class="mudo">Código de liberação (entregue só a quem recebe):</p><div class="codigo">${esc(codigo)}</div>` : ""}
-    ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de liberação</label><input id="tr-cod" autocomplete="off" autocapitalize="characters" placeholder="XXXX-XXXX-XXXX">${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
+    ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de liberação</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="5 palavras, ex.: abacate bolsa canela dente elogio">${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
     ${acoes.includes("proporAcordo") ? `<label for="tr-acordo">Proposta: quanto do restante vai ao trabalhador? <b id="tr-acordo-v">50%</b></label><input type="range" id="tr-acordo" min="0" max="100" value="50">${botaoSegurar("propor acordo", "tr-acordo")}` : ""}
     ${acoes.includes("avaliar") ? `<h2>Avalie a outra parte</h2><div class="estrelas" role="group" aria-label="Estrelas">${[1, 2, 3, 4, 5].map((n) => `<button data-estrela="${n}" aria-label="${n} estrelas">★</button>`).join("")}</div>${botaoSegurar("enviar avaliação", "tr-avaliar")}` : ""}
     ${acoes.filter((a) => ROTULOS[a]).map((a) => (a === "abrirDisputa" || a === "desistir" || a === "cancelar" ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
@@ -791,7 +751,7 @@ TELAS.AJUSTES = async () => {
       <h2 style="margin-top:0">Sobre</h2>
       <div class="linha"><span>Versão</span><b>${esc(VERSAO)}</b></div>
       <div class="linha"><span>Sua carteira</span><a href="${esc(linkExplorer(S.chainId, "address", S.endereco))}" target="_blank" rel="noopener">${esc(curto(S.endereco))}</a></div>
-      ${S.imp ? ["xBRL", "ReservaBRL", "CofreRendimento", "EscrowTrabalho"].map((n) => `<div class="linha"><span>${n}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
+      ${S.imp ? ["xBRL", "ReservaBRL", "EscrowTrabalho"].map((n) => `<div class="linha"><span>${n}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
       <div class="linha"><span>Taxa vitalícia 0,1% para</span><span>${esc(curto(CREATOR_TREASURY))}</span></div>
     </div>
     <h2>Zona de perigo</h2>
@@ -917,15 +877,6 @@ async function acao(nome, el) {
     case "modo-emitir":
     case "modo-resgatar":
       return ir("RESERVA", { modo: nome.slice(5) });
-    case "modo-depositar":
-    case "modo-sacar":
-      return ir("COFRE", { modo: nome.slice(5) });
-    case "cof-tudo": {
-      const s = S.params.saldos;
-      $("#cof-valor").value = E.formatUnits(S.params.modo === "sacar" ? s.meu : s.saldoX, 18);
-      S.params.tudo = true;
-      return;
-    }
     case "torneira": {
       const l = S.params.lastros[0];
       await executar(`Torneira ${l.simbolo}`, [{ rotulo: "Pegar moedas de teste", fn: (o) => erc20(l.endereco, true).torneira(o) }]);
@@ -1029,24 +980,6 @@ async function confirmar(nome) {
       }
       return;
     }
-    case "cofre": {
-      const k = c("CofreRendimento", true);
-      const v = lerValor($("#cof-valor").value, 18);
-      if ((S.params.modo || "depositar") === "depositar") {
-        await executar("Guardar no cofre", [passoAprovar(S.imp.xBRL, S.imp.CofreRendimento, v, "Autorizar xBRL"), { rotulo: "Depositar", fn: (o) => k.deposit(v, S.endereco, o) }]);
-      } else if (S.params.tudo && v === S.params.saldos.meu) {
-        await executar("Sacar do cofre", [{ rotulo: "Sacar tudo", fn: (o) => k.redeem(S.params.saldos.cotas, S.endereco, S.endereco, o) }]);
-      } else {
-        await executar("Sacar do cofre", [{ rotulo: "Sacar", fn: (o) => k.withdraw(v, S.endereco, S.endereco, o) }]);
-      }
-      return;
-    }
-    case "receita": {
-      const v = lerValor($("#rec-valor").value, 18);
-      const ref = $("#rec-ref").value.trim().slice(0, 80);
-      await executar("Depositar receita", [passoAprovar(S.imp.xBRL, S.imp.CofreRendimento, v, "Autorizar xBRL"), { rotulo: "Depositar receita", fn: (o) => c("CofreRendimento", true).depositarReceita(v, ref, o) }]);
-      return;
-    }
     case "abastecer": {
       const cot = S.params.cotacao;
       modal(`<div class="giro"></div><h2>Abastecendo</h2><p class="mudo">Gasto máximo: ${fmt(cot.entradaMaxima, cot.decimais, 4)} ${esc(cot.simbolo)}</p>`);
@@ -1098,7 +1031,7 @@ async function criarTrabalho() {
   };
   await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar xBRL"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
   if (codigo) {
-    modal(`<h2>✅ Pagamento travado</h2><p>Código de liberação — entregue <b>só</b> a quem vai receber o serviço/entrega:</p><div class="codigo">${esc(codigo)}</div>
+    modal(`<h2>✅ Pagamento travado</h2><p>Código de liberação (5 palavras) — entregue <b>só</b> a quem vai receber o serviço/entrega:</p><div class="codigo">${esc(codigo)}</div>
       <p class="mudo">Ele também fica salvo neste aparelho, na tela do trabalho.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   }
   ir("TRABALHOS", { aba: "meus" });
@@ -1128,6 +1061,7 @@ async function acaoTrabalho(nome) {
     },
     codigo: () => {
       const cod = normalizarCodigo($("#tr-cod").value);
+      if (!codigoTemFormatoValido(cod)) throw new Error("O código tem 5 palavras. Confira com quem recebe.");
       if (hashCodigo(S.imp.EscrowTrabalho, t.cliente, cod) !== t.codigoHash) throw new Error("Código incorreto");
       return executar("Confirmar com código", [{ rotulo: "Liberar com código", fn: (o) => k.confirmarComCodigo(id, cod, o) }]);
     },

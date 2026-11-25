@@ -15,7 +15,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 ///                  Libera pelo código do cliente (se definido), pelo aceite do cliente ou, após entrega
 ///                  marcada, automaticamente em 3 dias sem contestação.
 ///   1 ENTREGA    — leva algo a um destino. Exige check-in GPS a até 80 m do destino + CÓDIGO DE ENTREGA
-///                  que só o destinatário tem. Código correto = pagamento imediato.
+///                  (5 palavras) que só o destinatário tem. Código correto = pagamento imediato.
 ///   2 REMOTO     — trabalho digital. Trabalhador marca entregue; cliente aprova ou, em 3 dias de silêncio,
 ///                  o trabalhador saca.
 ///   3 ETAPAS     — projeto em 2 a 50 parcelas iguais; cada etapa segue a regra do REMOTO.

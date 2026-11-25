@@ -25,10 +25,10 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 
 ## 3. Invariantes dos contratos (não negociáveis)
 1. **xBRL** — sem blacklist, sem pausa, sem congelamento, sem proxy/upgrade, sem `burnFrom` administrativo. Só a Reserva emite. `burn` só do próprio saldo. `inicializar` roda uma única vez e depois o token não tem nenhum papel administrativo.
-2. **Taxa de 0,1% (10 bps)** para o `CREATOR_TREASURY`, imutável: em transferências entre carteiras comuns (dentro do `_update`), na emissão e no resgate (Reserva) e em cada pagamento do Escrow. Cofre não cobra taxa. Contratos do protocolo são isentos no token para não quebrar contabilidade.
-3. **Reserva** — `lastroTotal() >= totalSupply()` sempre (testado por fuzzing + invariantes). Fase 1 (< 1M xBRL): 1:1 estrito. Fase 2 (≥ 1M): spread dinâmico até 0,40% que **fica na reserva** (sobrecolateral), janela de resgate de 20% do supply/24 h. Resgate **nunca** pausável. Dono só pode: propor lastro (ativa após 7 dias, por qualquer pessoa) e pausar a **emissão** de um lastro.
-4. **Cofre (ERC-4626)** — rendimento só de receita real (`depositarReceita`), liberada por segundo com teto contínuo de 1.570 bps (= 17% a.a. efetivo). Sem dono, sem taxa, offset de 6 casas contra ataque de inflação.
-5. **Escrow** — 4 modalidades (Presencial, Entrega, Remoto, Etapas). Raio GPS 80 m (`RAIO_MAX_MM = 80_000`). Código de entrega: `keccak256(abi.encode(escrow, cliente, codigo))`, 12 caracteres. Revisão 3 dias; disputa sem árbitro: acordo por propostas iguais ou 50/50 após 30 dias. Reputação Nível 0–5 (mesma regra em `EscrowTrabalho.nivel` e `wallet/src/escrow-client.js#calcularNivel` — mudou um, muda o outro).
+2. **Taxa de 0,1% (10 bps)** para o `CREATOR_TREASURY`, imutável: em transferências entre carteiras comuns (dentro do `_update`), na emissão e no resgate (Reserva) e em cada pagamento do Escrow. Reserva e Escrow são isentos no token para não quebrar contabilidade (cobram a taxa explicitamente).
+3. **Reserva** — `lastroTotal() >= totalSupply()` sempre (testado por fuzzing + invariantes). Fase 1 (< 1M xBRL): 1:1 estrito. Fase 2 (≥ 1M): spread dinâmico até 0,40% que **fica na reserva** (sobrecolateral), janela de resgate de 20% do supply/24 h. Resgate **nunca** pausável. Dono (= `CREATOR_TREASURY`, definido no construtor) só pode: propor lastro (ativa após 7 dias, por qualquer pessoa) e pausar a **emissão** de um lastro.
+4. **Sem rendimento.** Decisão do dono (24/11/2026): o protocolo não promete nem paga juros/rendimento. Não criar cofre, staking, APY ou qualquer texto de "rende X%".
+5. **Escrow** — 4 modalidades (Presencial, Entrega, Remoto, Etapas). Raio GPS 80 m (`RAIO_MAX_MM = 80_000`). Código de entrega: 5 palavras da lista BIP-39 em português (~55 bits, `wallet/src/palavras-pt.js`), normalizadas em minúsculas separadas por um espaço; hash `keccak256(abi.encode(escrow, cliente, codigo))`. Revisão 3 dias; disputa sem árbitro: acordo por propostas iguais ou 50/50 após 30 dias. Reputação Nível 0–5 (mesma regra em `EscrowTrabalho.nivel` e `wallet/src/escrow-client.js#calcularNivel` — mudou um, muda o outro).
 6. Compilar com **zero warnings** (`deny = "warnings"` + forge-lint). Solidity `^0.8.24`, `evm_version = shanghai`.
 
 ## 4. Carteira (PWA) — regras
@@ -54,24 +54,25 @@ Fonte do sistema (arredondada), botões grandes, mobile-first, ícones emoji, va
 ```bash
 cd contracts
 forge build                       # zero warnings obrigatório
-forge test                        # 72 testes (unit, fuzz, invariantes, integração, script)
+forge test                        # 60 testes (unit, fuzz, invariantes, integração, script)
 FOUNDRY_PROFILE=ci forge test     # fuzz com 2048 execuções
 node script/exportar-abis.cjs     # regenera wallet/src/abis.js depois de mudar contratos
 
-# Deploy (chave importada uma vez: cast wallet import xbrl-deployer --interactive)
-forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url amoy    --account xbrl-deployer --broadcast --verify
-forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url polygon --account xbrl-deployer --broadcast --verify
-# variáveis: AMOY_RPC_URL, POLYGON_RPC_URL, POLYGONSCAN_API_KEY
+# Deploy: NÃO rodar à mão. Usar o workflow "Deploy dos contratos (automático)"
+# (.github/workflows/deploy-contratos.yml), que usa o segredo DEPLOYER_PRIVATE_KEY (chave descartável,
+# sem poder após o deploy), espera saldo de POL, implanta, verifica no Sourcify, grava o JSON na main,
+# republica o site e devolve o troco ao CREATOR_TREASURY.
+#   gh api repos/digitalrobertlima/xbrl/actions/workflows/deploy-contratos.yml/dispatches -f ref=main -f inputs[rede]=polygon
 
 # Teste local completo
 anvil &
 forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url http://127.0.0.1:8545 --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --broadcast
 cd .. && python3 -m http.server 8080   # abrir http://127.0.0.1:8080/wallet/?rede=31337
 ```
-Depois do deploy, commitar `wallet/src/deployments/<chainId>.json` (o CI publica no Pages).
+O workflow de deploy commita `wallet/src/deployments/<chainId>.json` e dispara o `ci-deploy.yml` (Pages).
 
 ## 7. Antes de publicar
 1. `forge build` sem warnings e `forge test` 100% verde.
 2. ABIs regeneradas e commitadas.
-3. Testar a carteira de ponta a ponta (criar, emitir, enviar, cofre, trabalho com código, bloquear/desbloquear) contra Anvil ou Amoy.
+3. Testar a carteira de ponta a ponta (criar, emitir, resgatar, enviar, trabalho com código, bloquear/desbloquear) contra Anvil ou Amoy.
 4. Contratos não auditados: não divulgar como "auditado"; manter os avisos de risco da landing.

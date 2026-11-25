@@ -49,7 +49,9 @@ jobs:
 
       - name: Criar chave descartável
         run: |
-          chave=$(cast wallet new --json | jq -r '.[0].private_key')
+          # Compatível com os dois formatos do cast (lista simples ou envelope {data: [...]}).
+          chave=$(cast wallet new --json | jq -r '(.data // .) | (if type == "array" then .[0] else . end) | .private_key')
+          test -n "$chave" && test "$chave" != "null" || { echo "::error::Não foi possível criar a chave"; exit 1; }
           echo "::add-mask::$chave"
           echo "CHAVE=$chave" >> "$GITHUB_ENV"
           end=$(cast wallet address "$chave")

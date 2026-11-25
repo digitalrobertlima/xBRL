@@ -24,6 +24,7 @@ on:
 permissions:
   contents: write
   actions: write
+  issues: write
 
 concurrency:
   group: deploy-${{ inputs.rede }}
@@ -57,6 +58,16 @@ jobs:
           end=$(cast wallet address "$chave")
           echo "### Envie ${{ inputs.saldo_minimo_pol }} POL (rede ${{ inputs.rede }}) para: \`$end\`" >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=Carteira de deploy::$end"
+          echo "DEPLOYER_AVISO=$end" >> "$GITHUB_ENV"
+
+      - name: Avisar no GitHub (issue) o endereço que precisa de POL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh issue create -R "$GITHUB_REPOSITORY" \
+            --title "⛽ Deploy ${{ inputs.rede }}: envie ${{ inputs.saldo_minimo_pol }} POL para $DEPLOYER_AVISO" \
+            --body "Rede: **${{ inputs.rede }}**. Envie **${{ inputs.saldo_minimo_pol }} POL** para \`$DEPLOYER_AVISO\`. O deploy começa sozinho quando o saldo chegar e o POL que sobrar volta para o CREATOR_TREASURY. Execução: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+          echo "ISSUE_URL=$url" >> "$GITHUB_ENV"
 
       - name: Preparar rede
         run: |
@@ -135,3 +146,11 @@ jobs:
               --gas-limit 21000 --gas-price "$(echo "$preco * 2 + 40000000000" | bc)"
             echo "Devolvido: $(cast from-wei "$valor") POL"
           fi
+
+      - name: Fechar o aviso
+        if: always() && env.ISSUE_URL != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue close "$ISSUE_URL" -R "$GITHUB_REPOSITORY" --comment "Execução terminou: ${{ job.status }}. $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

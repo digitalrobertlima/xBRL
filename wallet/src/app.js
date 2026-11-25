@@ -713,7 +713,7 @@ TELAS.RESERVA = async () => {
   const colatTxt = colat > 10n ** 30n ? "—" : `${(Number(colat) / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
   tela(`
     <h1>Reserva BRL</h1>
-    ${saldoBeta > 0n ? `<div class="aviso">🧪 Você tem <b>${fmt(saldoBeta)}</b> da versão de testes (beta). Ela foi substituída: resgate em BRZ e emita BRLS novo aqui embaixo.<button class="btn sec" data-acao="beta-resgatar">Resgatar a versão beta em BRZ</button></div>` : ""}
+    ${saldoBeta > 0n ? `<div class="aviso">🧪 Você tem <b>${fmt(saldoBeta)}</b> da versão de testes (beta). Ela foi substituída pela versão oficial. Um toque troca tudo pelo BRLS novo (custa 0,2% e um pouco de POL).<button class="btn prim" data-acao="beta-resgatar">Trocar pela versão nova</button></div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Fase</span><b>${Number(fase) === 1 ? "1 · resgate livre" : "2 · resgate até 20%/dia"}</b></div>
       <div class="linha"><span>BRLS em circulação</span><b>${fmt(supply)}</b></div>
@@ -1399,7 +1399,17 @@ async function acao(nome, el) {
           break;
         }
       }
-      await executar("Resgatar beta", [passoAprovar(S.beta.xBRL, S.beta.ReservaBRL, v, "Autorizar"), { rotulo: "Resgatar", fn: (o) => rb.resgatar(lastro, v, 0, o) }]);
+      // Troca completa: resgata a beta no lastro e emite BRLS novo com o que voltou (2 taxas de 0,1%).
+      const [pago] = await rb.cotarResgate(lastro, v);
+      const tok = erc20(lastro);
+      const antes = await tok.balanceOf(S.endereco);
+      const rn = c("ReservaBRL", true);
+      await executar("Trocar pela versão nova", [
+        passoAprovar(S.beta.xBRL, S.beta.ReservaBRL, v, "Autorizar a versão antiga"),
+        { rotulo: "Resgatar a versão antiga", fn: (o) => rb.resgatar(lastro, v, pago, o) },
+        passoAprovar(lastro, S.imp.ReservaBRL, pago, "Autorizar a Reserva nova"),
+        { rotulo: "Emitir BRLS novo", fn: async (o) => rn.emitir(lastro, (await tok.balanceOf(S.endereco)) - antes, 0, o) },
+      ]);
       return;
     }
     case "guia-ok":

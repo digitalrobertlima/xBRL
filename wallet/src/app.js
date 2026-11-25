@@ -41,7 +41,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR"],
@@ -68,7 +68,7 @@ function ir(destino, params = {}) {
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
-  const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
+  const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
   if (aberta) history.replaceState({ tela: destino }, "", location.pathname + location.search);
   window.scrollTo(0, 0);
@@ -229,20 +229,49 @@ function escolherRedeInicial() {
   return REDES[pedida] ? pedida : REDE_PADRAO;
 }
 
+// RPC que troca sozinho de servidor quando um nó público recusa (403, limite, "archive", fora do ar).
+// Erros legítimos da própria transação (revert, saldo, nonce) não trocam de servidor: voltam para a tela.
+const ERRO_LEGITIMO = /revert|execution|insufficient funds|nonce|underpriced|already known|known transaction|intrinsic gas|gas required exceeds/i;
+class ProvedorRotativo extends E.JsonRpcApiProvider {
+  constructor(urls, chainId) {
+    const net = E.Network.from(chainId);
+    super(net, { staticNetwork: net, batchMaxCount: 1, cacheTimeout: -1, polling: true, pollingInterval: urls[0].includes("127.0.0.1") ? 1000 : 2000 });
+    this._urls = urls;
+    this._atual = 0;
+  }
+
+  async _send(payload) {
+    const corpo = JSON.stringify(payload);
+    const unico = Array.isArray(payload) ? payload[0] : payload;
+    let ultimo;
+    for (let n = 0; n < this._urls.length; n++) {
+      const k = (this._atual + n) % this._urls.length;
+      const url = this._urls[k];
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: corpo, signal: AbortSignal.timeout(12_000) });
+        if (!r.ok) throw new Error(`servidor ${new URL(url).host} respondeu ${r.status}`);
+        const j = await r.json();
+        const lista = Array.isArray(j) ? j : [j];
+        // Transação já enviada por um servidor anterior: não é erro, devolve o hash.
+        if (unico?.method === "eth_sendRawTransaction" && lista[0]?.error && /already known|known transaction/i.test(String(lista[0].error.message))) {
+          return [{ jsonrpc: "2.0", id: unico.id, result: E.keccak256(unico.params[0]) }];
+        }
+        const ruim = lista.find((x) => x?.error && x.error.code !== 3 && !ERRO_LEGITIMO.test(String(x.error.message || "")));
+        if (ruim) throw new Error(`servidor ${new URL(url).host}: ${ruim.error.message}`);
+        this._atual = k;
+        return lista;
+      } catch (e) {
+        ultimo = e;
+      }
+    }
+    throw ultimo;
+  }
+}
+
 async function conectarRede(chainId) {
   S.chainId = chainId;
   S.rede = REDES[chainId];
-  const rpcs = S.rede.rpcs;
-  if (rpcs.length === 1) {
-    S.provider = new E.JsonRpcProvider(rpcs[0], chainId, { staticNetwork: true, polling: true, pollingInterval: 1000 });
-  } else {
-    const net = E.Network.from(chainId);
-    S.provider = new E.FallbackProvider(
-      rpcs.map((u, i) => ({ provider: new E.JsonRpcProvider(u, net, { staticNetwork: net }), priority: i + 1, weight: 1, stallTimeout: 2500 })),
-      net,
-      { quorum: 1 },
-    );
-  }
+  S.provider = new ProvedorRotativo(S.rede.rpcs, chainId);
   S.imp = await carregarImplantacao(chainId);
   S.escrow = S.imp ? new EscrowClient(S.provider, chainId, S.imp.EscrowTrabalho, S.imp.blocoInicial) : null;
   S.chat = S.imp ? new Chat(S.provider, S.imp.Mensageiro, S.imp.blocoInicial) : null;
@@ -540,6 +569,7 @@ TELAS.INICIO = async () => {
       <button class="atalho" data-acao="modo-resgatar"><span>💵</span>Resgatar</button>
       <button class="atalho" data-ir="TRABALHOS"><span>🤝</span>Trabalhos</button>
       <button class="atalho" data-ir="TANQUE"><span>⛽</span>Tanque</button>
+      <button class="atalho" data-ir="EXTRATO"><span>🧾</span>Extrato</button>
       <button class="atalho" data-ir="COFRE"><span>🏦</span>Cofre cripto</button>
     </div>
     <div class="cartao">
@@ -673,6 +703,95 @@ TELAS.TANQUE = async () => {
     G.definirAuto(ev.target.checked);
     toast(ev.target.checked ? "Abastecimento automático ligado (slippage máx. 1%)" : "Abastecimento automático desligado");
   });
+};
+
+// ---------- Extrato ----------
+const TOPICO_TRANSFER = E.id("Transfer(address,address,uint256)");
+
+/** Lê todas as transferências ERC-20 que entraram ou saíram da carteira (emissões e queimas incluídas). */
+async function lerExtrato() {
+  const eu = E.zeroPadValue(S.endereco, 32);
+  const tokens = new Map();
+  for (const t of S.tokensInfo) if (t.endereco) tokens.set(t.endereco.toLowerCase(), t);
+  if (S.imp?.xBRL) tokens.set(S.imp.xBRL.toLowerCase(), tokens.get(S.imp.xBRL.toLowerCase()) || { simbolo: "xBRL", decimais: 18, endereco: S.imp.xBRL });
+  const enderecos = [...tokens.values()].map((t) => t.endereco);
+  const atual = await S.provider.getBlockNumber();
+  const inicio = Number(S.imp?.blocoInicial) || Math.max(0, atual - 500_000);
+  const logs = [];
+  for (const topicos of [[TOPICO_TRANSFER, eu], [TOPICO_TRANSFER, null, eu]]) {
+    let de = inicio;
+    let passo = 50_000;
+    while (de <= atual) {
+      const ate = Math.min(atual, de + passo - 1);
+      try {
+        logs.push(...(await S.provider.getLogs({ address: enderecos, topics: topicos, fromBlock: de, toBlock: ate })));
+        de = ate + 1;
+      } catch (e) {
+        if (passo <= 500) throw e;
+        passo = Math.floor(passo / 4);
+      }
+    }
+  }
+  const vistos = new Set();
+  const itens = [];
+  for (const l of logs) {
+    const chave = `${l.transactionHash}:${l.index}`;
+    if (vistos.has(chave)) continue;
+    vistos.add(chave);
+    const t = tokens.get(l.address.toLowerCase());
+    if (!t || l.topics.length !== 3) continue;
+    const de = E.getAddress("0x" + l.topics[1].slice(26));
+    const para = E.getAddress("0x" + l.topics[2].slice(26));
+    itens.push({ t, de, para, valor: BigInt(l.data), bloco: l.blockNumber, idx: l.index, tx: l.transactionHash });
+  }
+  itens.sort((a, b) => b.bloco - a.bloco || b.idx - a.idx);
+  const recentes = itens.slice(0, 100);
+  const blocos = [...new Set(recentes.map((i) => i.bloco))];
+  const datas = new Map();
+  await Promise.all(blocos.map(async (b) => { try { datas.set(b, (await S.provider.getBlock(b)).timestamp); } catch { /* sem data */ } }));
+  for (const i of recentes) i.em = datas.get(i.bloco) || 0;
+  return { itens: recentes, total: itens.length };
+}
+
+function rotuloMov(i) {
+  const eu = S.endereco.toLowerCase();
+  const Z = E.ZeroAddress.toLowerCase();
+  const nomes = {};
+  if (S.imp) {
+    nomes[S.imp.ReservaBRL.toLowerCase()] = "Reserva";
+    nomes[S.imp.CofreCripto.toLowerCase()] = "Cofre cripto";
+    nomes[S.imp.EscrowTrabalho.toLowerCase()] = "Trabalhos (contrato)";
+  }
+  nomes[CREATOR_TREASURY.toLowerCase()] = "Criador da rede";
+  const nome = (a) => nomes[a.toLowerCase()] || curto(a);
+  if (i.de.toLowerCase() === Z) return { icone: "🪙", titulo: "Emissão", detalhe: "xBRL criado para você", sinal: 1 };
+  if (i.para.toLowerCase() === Z) return { icone: "🔥", titulo: "Queima", detalhe: "xBRL destruído", sinal: -1 };
+  const ehXbrl = S.imp && i.t.endereco.toLowerCase() === S.imp.xBRL.toLowerCase();
+  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.ReservaBRL.toLowerCase()) return { icone: "🔥", titulo: "Resgate", detalhe: "xBRL devolvido à Reserva e queimado", sinal: -1 };
+  if (ehXbrl && i.de.toLowerCase() === eu && i.para.toLowerCase() === S.imp.CofreCripto.toLowerCase()) return { icone: "🔥", titulo: "Dívida paga", detalhe: "xBRL pago ao cofre e queimado", sinal: -1 };
+  if (i.para.toLowerCase() === eu) return { icone: "⬇️", titulo: "Recebido", detalhe: `de ${nome(i.de)}`, sinal: 1 };
+  return { icone: "⬆️", titulo: "Enviado", detalhe: `para ${nome(i.para)}`, sinal: -1 };
+}
+
+TELAS.EXTRATO = async () => {
+  if (!S.imp) return tela(`<h1>🧾 Extrato</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
+  tela(`<h1>🧾 Extrato</h1><div class="cartao"><div class="giro"></div><p class="mudo">Lendo a blockchain…</p></div>`);
+  const { itens, total } = await lerExtrato();
+  const filtro = S.params.filtro || "todos";
+  const lista = itens.filter((i) => filtro === "todos" || (filtro === "xbrl" ? i.t.simbolo === "xBRL" : i.t.simbolo !== "xBRL"));
+  tela(`
+    <h1>🧾 Extrato</h1>
+    <p class="mudo">Tudo que entrou e saiu da sua carteira em moedas (emissões e queimas de xBRL incluídas). Mostrando as ${itens.length} mais recentes de ${total}.</p>
+    <div class="seg" role="group"><button data-acao="ext-todos" aria-pressed="${filtro === "todos"}">Tudo</button><button data-acao="ext-xbrl" aria-pressed="${filtro === "xbrl"}">xBRL</button><button data-acao="ext-outras" aria-pressed="${filtro === "outras"}">Outras moedas</button></div>
+    <div class="cartao">
+      ${lista.map((i) => {
+        const r = rotuloMov(i);
+        const link = linkExplorer(S.chainId, "tx", i.tx);
+        return `<div class="linha"><span>${r.icone} <b>${esc(r.titulo)}</b> · ${esc(i.t.simbolo)}<br><small class="mudo">${esc(r.detalhe)}${i.em ? " · " + esc(new Date(i.em * 1000).toLocaleString("pt-BR")) : ""}${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener">comprovante</a>` : ""}</small></span><b style="color:${r.sinal > 0 ? "var(--esm3, #6EE7B7)" : "#F87171"}">${r.sinal > 0 ? "+" : "−"}${fmt(i.valor, i.t.decimais, 4)}</b></div>`;
+      }).join("") || `<p class="mudo">Nenhuma movimentação ainda.</p>`}
+    </div>
+    <p class="mudo">Envios e recebimentos de POL (a moeda da taxa) não aparecem aqui: a Polygon não oferece essa lista sem um serviço externo. O saldo de POL está no Tanque.</p>
+    <button class="btn sec" data-acao="ext-atualizar">↻ Atualizar</button>`);
 };
 
 // ---------- Cofre cripto ----------
@@ -1136,6 +1255,12 @@ async function acao(nome, el) {
     case "aba-vagas":
     case "aba-arbitragens":
       return ir("TRABALHOS", { aba: nome.slice(4) });
+    case "ext-todos":
+    case "ext-xbrl":
+    case "ext-outras":
+      return ir("EXTRATO", { filtro: nome.slice(4) });
+    case "ext-atualizar":
+      return render();
     case "scan-devolucao":
       return escanearQR("#tr-dev");
     case "abrir-chat":

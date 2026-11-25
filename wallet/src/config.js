@@ -32,7 +32,7 @@ export const REDES = {
     tokens: [
       { simbolo: "BRZ", nome: "BRZ (Transfero)", endereco: "0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc", decimais: 18, lastro: true },
       { simbolo: "BRLA", nome: "BRLA (Avenia)", endereco: "0xE6A537a407488807F0bbeb0038B79004f19DDDFb", decimais: 18, lastro: true },
-      { simbolo: "USDC", nome: "USD Coin (nativo)", endereco: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimais: 6 },
+      { simbolo: "USDC", nome: "USD Coin (nativo)", endereco: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", decimais: 6, moeda: "USD" },
     ],
     uniswap: {
       // Uniswap V3 — Polygon PoS
@@ -76,6 +76,8 @@ export const TANQUE = {
   minimoParaOperarPol: "0.02", // reserva mínima para pagar o próprio swap
   slippageMaxBps: 100n, // 1,00% no máximo, nunca mais
   validadeSegundos: 300,
+  // Trava contra cotação absurda (RPC malicioso ou pool manipulado): preço máximo aceito por 1 POL.
+  precoMaximoPorPol: { BRL: "5", USD: "1" },
 };
 
 /** Regras de campo do marketplace (iguais às do contrato). */

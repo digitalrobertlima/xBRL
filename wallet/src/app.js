@@ -284,7 +284,7 @@ async function executar(titulo, passos) {
   try {
     const opts = await opcoesGas();
     // Tanque automático: garante POL antes, se o usuário ativou.
-    const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo }));
+    const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo, decimais: t.decimais, moeda: t.moeda || "BRL" }));
     modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Verificando o tanque de gás…</p>`);
     const auto = await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts).catch(() => null);
     if (auto) toast(`⛽ Tanque abastecido com ${auto.simbolo}`);
@@ -705,7 +705,8 @@ TELAS.TRABALHO = async () => {
   const ROTULOS = {
     aceitar: "aceitar o trabalho", cancelar: "cancelar e reaver o valor", checkIn: "fazer check-in (GPS)", marcarEntregue: "marcar como entregue",
     liberar: t.modalidade === 3 && t.etapasPagas + 1 < t.etapas ? `liberar a etapa ${t.etapasPagas + 1}` : "aprovar e pagar", reivindicar: "receber (prazo de revisão vencido)",
-    desistir: "desistir (devolve ao cliente)", abrirDisputa: "abrir disputa", reembolsarPorPrazo: "reaver (prazo vencido)", resolverPorTempo: "executar divisão 50/50",
+    desistir: "desistir (devolve ao cliente)", aprovarCandidato: "aprovar este trabalhador", recusarCandidato: "recusar o candidato",
+    retirarCandidatura: "retirar minha candidatura", abrirDisputa: "abrir disputa", reembolsarPorPrazo: "reaver (prazo vencido)", resolverPorTempo: "executar divisão 50/50",
   };
   tela(`
     <h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
@@ -716,7 +717,8 @@ TELAS.TRABALHO = async () => {
       ${t.etapas > 1 ? `<div class="linha"><span>Etapas pagas</span><b>${t.etapasPagas} de ${t.etapas}</b></div>` : ""}
       <div class="linha"><span>Prazo</span><b>${new Date(t.prazo * 1000).toLocaleString("pt-BR")}</b></div>
       <div class="linha"><span>Cliente</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)}</span></div>
-      <div class="linha"><span>Trabalhador</span><span>${t.trabalhador === E.ZeroAddress ? "vaga aberta" : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)}`}</span></div>
+      <div class="linha"><span>${t.pendenteAprovacao ? "Candidato" : "Trabalhador"}</span><span>${t.trabalhador === E.ZeroAddress ? "vaga aberta" : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)} ${rt ? `<small class="mudo">${Number(rt.concluidos)} feitos</small>` : ""}`}</span></div>
+      ${t.pendenteAprovacao ? `<div class="linha"><span>Situação</span><b>aguardando o cliente aprovar</b></div>` : ""}
       ${t.modalidade <= 1 ? `<div class="linha"><span>Local</span><span>${(t.lat / 1e6).toFixed(6)}, ${(t.lon / 1e6).toFixed(6)} ${t.checkin ? '<span class="selo verde">check-in ok</span>' : ""}</span></div>` : ""}
       ${t.estado === 2 ? `<div class="linha"><span>Pagamento automático em</span><b>${new Date((t.entregueEm + ESCROW.prazoRevisaoDias * 86400) * 1000).toLocaleString("pt-BR")}</b></div>` : ""}
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
@@ -725,7 +727,7 @@ TELAS.TRABALHO = async () => {
     ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de liberação</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="5 palavras, ex.: abacate bolsa canela dente elogio">${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
     ${acoes.includes("proporAcordo") ? `<label for="tr-acordo">Proposta: quanto do restante vai ao trabalhador? <b id="tr-acordo-v">50%</b></label><input type="range" id="tr-acordo" min="0" max="100" value="50">${botaoSegurar("propor acordo", "tr-acordo")}` : ""}
     ${acoes.includes("avaliar") ? `<h2>Avalie a outra parte</h2><div class="estrelas" role="group" aria-label="Estrelas">${[1, 2, 3, 4, 5].map((n) => `<button data-estrela="${n}" aria-label="${n} estrelas">★</button>`).join("")}</div>${botaoSegurar("enviar avaliação", "tr-avaliar")}` : ""}
-    ${acoes.filter((a) => ROTULOS[a]).map((a) => (a === "abrirDisputa" || a === "desistir" || a === "cancelar" ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
+    ${acoes.filter((a) => ROTULOS[a]).map((a) => (["abrirDisputa", "desistir", "cancelar", "recusarCandidato"].includes(a) ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
     ${acoes.length === 0 ? `<p class="mudo">Nenhuma ação disponível para você agora.</p>` : ""}
     <button class="btn sec" data-ir="TRABALHOS">Voltar</button>`);
   $("#tr-acordo")?.addEventListener("input", (ev) => ($("#tr-acordo-v").textContent = `${ev.target.value}%`));
@@ -897,7 +899,7 @@ async function acao(nome, el) {
       const t = S.params.candidatos[Number($("#tq-token").value)];
       if (S.params.faltam === 0n) return toast("O tanque já está cheio");
       $("#tq-cot").innerHTML = `<div class="giro"></div>`;
-      const cot = await G.cotarAbastecimento(S.provider, S.chainId, t.endereco, S.params.faltam);
+      const cot = await G.cotarAbastecimento(S.provider, S.chainId, t.endereco, S.params.faltam, t);
       S.params.cotacao = { ...cot, simbolo: t.simbolo, decimais: t.decimais };
       $("#tq-cot").innerHTML = `<div class="cartao"><div class="linha"><span>Recebe</span><b>${fmt(cot.quantidadePol, 18, 4)} POL</b></div>
         <div class="linha"><span>Custo cotado</span><b>${fmt(cot.entradaCotada, t.decimais, 4)} ${esc(t.simbolo)}</b></div>
@@ -1015,7 +1017,7 @@ async function criarTrabalho() {
     lon = paraMicro(lo);
   }
   let codigo = null;
-  if (m === 1 || $("#tn-cod")?.checked) codigo = gerarCodigoEntrega();
+  if (m === 1 || $("#tn-cod")?.checked) codigo = gerarCodigoEntrega(valor >= E.parseEther("1000") ? 6 : 5);
   const codigoHash = codigo ? hashCodigo(S.imp.EscrowTrabalho, S.endereco, codigo) : E.ZeroHash;
   if (codigo) guardarCodigo(codigoHash, codigo);
   const p = {
@@ -1045,6 +1047,9 @@ async function acaoTrabalho(nome) {
     aceitar: () => executar("Aceitar trabalho", [{ rotulo: "Aceitar", fn: (o) => k.aceitar(id, o) }]),
     cancelar: () => executar("Cancelar", [{ rotulo: "Cancelar", fn: (o) => k.cancelar(id, o) }]),
     desistir: () => executar("Desistir", [{ rotulo: "Desistir", fn: (o) => k.desistir(id, o) }]),
+    retirarCandidatura: () => executar("Retirar candidatura", [{ rotulo: "Retirar", fn: (o) => k.desistir(id, o) }]),
+    aprovarCandidato: () => executar("Aprovar trabalhador", [{ rotulo: "Aprovar", fn: (o) => k.decidirCandidato(id, true, o) }]),
+    recusarCandidato: () => executar("Recusar candidato", [{ rotulo: "Recusar", fn: (o) => k.decidirCandidato(id, false, o) }]),
     marcarEntregue: () => executar("Marcar entregue", [{ rotulo: "Marcar entregue", fn: (o) => k.marcarEntregue(id, o) }]),
     liberar: () => executar("Pagar trabalhador", [{ rotulo: "Liberar", fn: (o) => k.liberar(id, o) }]),
     reivindicar: () => executar("Receber pagamento", [{ rotulo: "Receber", fn: (o) => k.reivindicar(id, o) }]),

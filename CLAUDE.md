@@ -59,9 +59,10 @@ FOUNDRY_PROFILE=ci forge test     # fuzz com 2048 execuções
 node script/exportar-abis.cjs     # regenera wallet/src/abis.js depois de mudar contratos
 
 # Deploy: NÃO rodar à mão. Usar o workflow "Deploy dos contratos (automático)"
-# (.github/workflows/deploy-contratos.yml), que usa o segredo DEPLOYER_PRIVATE_KEY (chave descartável,
-# sem poder após o deploy), espera saldo de POL, implanta, verifica no Sourcify, grava o JSON na main,
-# republica o site e devolve o troco ao CREATOR_TREASURY.
+# (.github/workflows/deploy-contratos.yml): cria uma chave descartável no runner (não é guardada),
+# mostra o endereço, espera saldo de POL, implanta, verifica no Sourcify, grava o JSON na main,
+# republica o site e devolve o troco ao CREATOR_TREASURY. A chave não tem poder após o deploy.
+# NÃO disparar na Polygon (137) antes da revisão de segurança aprovada pelo dono.
 #   gh api repos/digitalrobertlima/xbrl/actions/workflows/deploy-contratos.yml/dispatches -f ref=main -f inputs[rede]=polygon
 
 # Teste local completo

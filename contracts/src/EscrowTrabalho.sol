@@ -55,6 +55,7 @@ contract EscrowTrabalho is ReentrancyGuard {
         bool checkin;
         bool clienteAvaliou;
         bool trabalhadorAvaliou;
+        bool pendenteAprovacao; // vaga aberta: candidato aguardando o cliente aprovar
         uint128 valor; // slot 2
         uint128 pago; // bruto já liberado (inclui taxa)
         int32 lat; // slot 3 — microdegraus
@@ -117,6 +118,8 @@ contract EscrowTrabalho is ReentrancyGuard {
         string descricao
     );
     event TrabalhoAceito(uint256 indexed id, address indexed trabalhador);
+    event CandidaturaRecebida(uint256 indexed id, address indexed candidato);
+    event CandidaturaEncerrada(uint256 indexed id, address indexed candidato, bool porCliente);
     event CheckIn(uint256 indexed id, address indexed trabalhador, int32 lat, int32 lon, uint256 distanciaMm);
     event EntregaMarcada(uint256 indexed id, uint8 etapa);
     event Pagamento(uint256 indexed id, address indexed para, uint256 liquido, uint256 taxa);
@@ -207,7 +210,10 @@ contract EscrowTrabalho is ReentrancyGuard {
         );
     }
 
-    /// @notice Aceita o trabalho. Vaga aberta: qualquer um (menos o cliente). Designado: só o escolhido.
+    /// @notice Aceita o trabalho. Designado: só o escolhido, e já começa.
+    /// Vaga aberta de ENTREGA: qualquer um aceita e já começa (sem o código não há pagamento).
+    /// Vaga aberta das demais modalidades: vira candidatura e o cliente precisa aprovar — impede que um
+    /// estranho aceite, marque "entregue" sem fazer nada e force a divisão 50/50 da disputa.
     function aceitar(uint256 id) external {
         Trabalho storage t = _existente(id);
         if (t.estado != Estado.Aberto) revert EstadoInvalido(t.estado);
@@ -215,11 +221,32 @@ contract EscrowTrabalho is ReentrancyGuard {
         if (t.trabalhador == address(0)) {
             if (msg.sender == t.cliente) revert NaoAutorizado();
             t.trabalhador = msg.sender;
-        } else if (msg.sender != t.trabalhador) {
+            if (t.modalidade != Modalidade.Entrega) {
+                t.pendenteAprovacao = true;
+                emit CandidaturaRecebida(id, msg.sender);
+                return;
+            }
+        } else if (msg.sender != t.trabalhador || t.pendenteAprovacao) {
             revert NaoAutorizado();
         }
         t.estado = Estado.Aceito;
         emit TrabalhoAceito(id, msg.sender);
+    }
+
+    /// @notice Cliente aprova (true) ou recusa (false) o candidato de uma vaga aberta.
+    function decidirCandidato(uint256 id, bool aprovar) external {
+        Trabalho storage t = _existente(id);
+        if (msg.sender != t.cliente) revert NaoAutorizado();
+        if (t.estado != Estado.Aberto || !t.pendenteAprovacao) revert EstadoInvalido(t.estado);
+        address candidato = t.trabalhador;
+        t.pendenteAprovacao = false;
+        if (aprovar) {
+            t.estado = Estado.Aceito;
+            emit TrabalhoAceito(id, candidato);
+        } else {
+            t.trabalhador = address(0);
+            emit CandidaturaEncerrada(id, candidato, true);
+        }
     }
 
     /// @notice Cliente cancela enquanto ninguém aceitou. Reembolso integral, sem taxa.
@@ -232,10 +259,17 @@ contract EscrowTrabalho is ReentrancyGuard {
         emit TrabalhoCancelado(id);
     }
 
-    /// @notice Trabalhador desiste antes de entregar. O restante volta ao cliente.
+    /// @notice Trabalhador desiste antes de entregar (o restante volta ao cliente).
+    /// Candidato ainda não aprovado apenas retira a candidatura (a vaga reabre).
     function desistir(uint256 id) external nonReentrant {
         Trabalho storage t = _existente(id);
         if (msg.sender != t.trabalhador) revert NaoAutorizado();
+        if (t.pendenteAprovacao) {
+            t.pendenteAprovacao = false;
+            t.trabalhador = address(0);
+            emit CandidaturaEncerrada(id, msg.sender, false);
+            return;
+        }
         if (t.estado != Estado.Aceito) revert EstadoInvalido(t.estado);
         t.estado = Estado.Cancelado;
         _reembolsarRestante(id, t);

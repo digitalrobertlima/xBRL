@@ -8,6 +8,7 @@ import { PALAVRAS } from "./palavras-pt.js";
 
 const e = () => globalThis.ethers;
 export const PALAVRAS_CODIGO = 5; // 5 × 11 bits = 55 bits de segredo
+export const PALAVRAS_CODIGO_ALTO_VALOR = 6; // 66 bits — a partir de 1.000 xBRL
 
 // --------------------------- Reputação ---------------------------
 
@@ -59,9 +60,10 @@ export function lerGps({ timeout = 20_000 } = {}) {
 
 // --------------------------- Código de entrega ---------------------------
 
-/** Código de entrega: 5 palavras portuguesas da lista BIP-39 (~55 bits), fáceis de ditar. */
-export function gerarCodigoEntrega() {
-  const n = new Uint16Array(PALAVRAS_CODIGO);
+/** Código de entrega: palavras portuguesas da lista BIP-39 (11 bits cada), fáceis de ditar.
+ * 5 palavras (~55 bits) por padrão; 6 (~66 bits) para valores altos, já que o hash fica público. */
+export function gerarCodigoEntrega(qtd = PALAVRAS_CODIGO) {
+  const n = new Uint16Array(qtd);
   crypto.getRandomValues(n);
   return [...n].map((x) => PALAVRAS[x % 2048]).join(" ");
 }
@@ -78,7 +80,7 @@ export function normalizarCodigo(c) {
 
 export function codigoTemFormatoValido(c) {
   const p = normalizarCodigo(c).split(" ");
-  return p.length === PALAVRAS_CODIGO && p.every((w) => PALAVRAS.includes(w));
+  return (p.length === PALAVRAS_CODIGO || p.length === PALAVRAS_CODIGO_ALTO_VALOR) && p.every((w) => PALAVRAS.includes(w));
 }
 
 /** keccak256(abi.encode(escrow, cliente, codigo)) — igual a EscrowTrabalho.hashCodigo. */
@@ -189,12 +191,19 @@ export class EscrowClient {
           descricao: String(ev.args.descricao || ""),
           bloco: ev.bloco,
           historico: [],
+          candidato: null,
         });
       }
       const t = mapa.get(id);
       if (!t) continue;
       t.historico.push({ nome: ev.nome, bloco: ev.bloco, tx: ev.tx, args: ev.args });
-      if (ev.nome === "TrabalhoAceito") t.trabalhador = ev.args.trabalhador;
+      if (ev.nome === "TrabalhoAceito") {
+        t.trabalhador = ev.args.trabalhador;
+        t.candidato = null;
+      }
+      if (ev.nome === "CandidaturaRecebida") t.candidato = ev.args.candidato;
+      if (ev.nome === "CandidaturaEncerrada") t.candidato = null;
+      if (ev.nome === "TrabalhoCancelado") t.encerrado = true;
     }
     return mapa;
   }
@@ -216,6 +225,7 @@ export class EscrowClient {
       checkin: t.checkin,
       clienteAvaliou: t.clienteAvaliou,
       trabalhadorAvaliou: t.trabalhadorAvaliou,
+      pendenteAprovacao: t.pendenteAprovacao,
       valor: t.valor,
       pago: t.pago,
       lat: Number(t.lat),
@@ -236,9 +246,10 @@ export class EscrowClient {
     const vagas = [];
     for (const t of mapa.values()) {
       const souCliente = t.cliente.toLowerCase() === eu;
-      const souTrab = t.trabalhador && t.trabalhador.toLowerCase() === eu;
+      const souTrab = (t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu);
+      const aberta = t.trabalhador === zero && !t.candidato && !t.encerrado && t.prazo > Math.floor(Date.now() / 1000);
       if (souCliente || souTrab) meus.push(t);
-      else if (t.trabalhador === zero && !t.historico.some((h) => h.nome !== "TrabalhoCriado")) vagas.push(t);
+      else if (aberta) vagas.push(t);
     }
     meus.sort((a, b) => b.bloco - a.bloco);
     vagas.sort((a, b) => b.bloco - a.bloco);
@@ -264,6 +275,11 @@ export class EscrowClient {
     switch (t.estado) {
       case 0: // Aberto
         if (souCliente) a.push("cancelar");
+        if (t.pendenteAprovacao) {
+          if (souCliente) a.push("aprovarCandidato", "recusarCandidato");
+          if (souTrab) a.push("retirarCandidatura");
+          break;
+        }
         if (!souCliente && (vaga || souTrab) && agora < t.prazo) a.push("aceitar");
         if (souCliente && agora > t.prazo) a.push("reembolsarPorPrazo");
         break;

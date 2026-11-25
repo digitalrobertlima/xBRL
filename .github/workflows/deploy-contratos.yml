@@ -1,10 +1,10 @@
 name: Deploy dos contratos (automático)
 
-# Roda o deploy determinístico na Polygon (ou Amoy) usando a chave descartável guardada no
-# segredo DEPLOYER_PRIVATE_KEY. Espera a carteira de deploy receber POL, implanta, verifica o
+# Cria uma chave de deploy DESCARTÁVEL dentro do próprio runner (não fica guardada em lugar nenhum),
+# mostra o endereço no resumo da execução, espera esse endereço receber POL, implanta, verifica o
 # código no Sourcify, grava wallet/src/deployments/<chainId>.json na main, republica o site e
-# devolve o POL que sobrar para o CREATOR_TREASURY. A chave não tem nenhum poder depois do deploy:
-# o dono da Reserva é o CREATOR_TREASURY desde o construtor.
+# devolve o POL que sobrar para o CREATOR_TREASURY (mesmo se algo falhar). A chave não tem nenhum
+# poder depois do deploy: o dono da Reserva é o CREATOR_TREASURY desde o construtor.
 
 on:
   workflow_dispatch:
@@ -34,7 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     env:
-      CHAVE: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
       TREASURY: "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1"
       FABRICA: "0x4e59b44847b379578588920cA78FbF26c0B4956C"
       POLYGON_RPC_URL: https://polygon-bor-rpc.publicnode.com
@@ -48,9 +47,17 @@ jobs:
         with:
           version: v1.10.0
 
+      - name: Criar chave descartável
+        run: |
+          chave=$(cast wallet new --json | jq -r '.[0].private_key')
+          echo "::add-mask::$chave"
+          echo "CHAVE=$chave" >> "$GITHUB_ENV"
+          end=$(cast wallet address "$chave")
+          echo "### Envie ${{ inputs.saldo_minimo_pol }} POL (rede ${{ inputs.rede }}) para: \`$end\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice title=Carteira de deploy::$end"
+
       - name: Preparar rede
         run: |
-          test -n "$CHAVE" || { echo "::error::Segredo DEPLOYER_PRIVATE_KEY ausente"; exit 1; }
           if [ "${{ inputs.rede }}" = "polygon" ]; then
             echo "RPC=$POLYGON_RPC_URL" >> "$GITHUB_ENV"; echo "CHAIN=137" >> "$GITHUB_ENV"; echo "GORJETA=40gwei" >> "$GITHUB_ENV"
           else

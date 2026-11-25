@@ -922,6 +922,55 @@ contract EscrowTrabalhoTest is Base {
         escrow.aceitar(999);
     }
 
+    function test_VagaAbertaRemotaExigeAprovacaoDoCliente() public {
+        uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, address(0), 100e18, 1, 0);
+        vm.prank(trab);
+        escrow.aceitar(id);
+        EscrowTrabalho.Trabalho memory t = escrow.trabalho(id);
+        assertTrue(t.pendenteAprovacao);
+        assertEq(uint8(t.estado), uint8(EscrowTrabalho.Estado.Aberto));
+
+        // O candidato não consegue marcar entrega nem abrir disputa antes da aprovação
+        vm.startPrank(trab);
+        vm.expectRevert(
+            abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aberto)
+        );
+        escrow.marcarEntregue(id);
+        vm.expectRevert(
+            abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aberto)
+        );
+        escrow.abrirDisputa(id);
+        vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
+        escrow.aceitar(id);
+        vm.stopPrank();
+
+        // Outro não pode decidir; cliente recusa e a vaga reabre
+        vm.prank(alice);
+        vm.expectRevert(EscrowTrabalho.NaoAutorizado.selector);
+        escrow.decidirCandidato(id, true);
+        vm.prank(cliente);
+        escrow.decidirCandidato(id, false);
+        assertEq(escrow.trabalho(id).trabalhador, address(0));
+
+        // Novo candidato retira a candidatura; outro se candidata e é aprovado
+        vm.prank(alice);
+        escrow.aceitar(id);
+        vm.prank(alice);
+        escrow.desistir(id);
+        assertEq(uint8(escrow.trabalho(id).estado), uint8(EscrowTrabalho.Estado.Aberto));
+        vm.prank(trab);
+        escrow.aceitar(id);
+        vm.prank(cliente);
+        escrow.decidirCandidato(id, true);
+        assertEq(uint8(escrow.trabalho(id).estado), uint8(EscrowTrabalho.Estado.Aceito));
+        vm.prank(cliente);
+        vm.expectRevert(
+            abi.encodeWithSelector(EscrowTrabalho.EstadoInvalido.selector, EscrowTrabalho.Estado.Aceito)
+        );
+        escrow.decidirCandidato(id, true);
+        assertEq(token.balanceOf(address(escrow)), 100e18, "nada saiu do escrow");
+    }
+
     function test_DesignadoSoEleAceita() public {
         uint256 id = _novo(EscrowTrabalho.Modalidade.Remoto, trab, 1e18, 1, 0);
         vm.prank(alice);

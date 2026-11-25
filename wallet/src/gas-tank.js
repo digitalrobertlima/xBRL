@@ -88,7 +88,7 @@ function caminhoReverso(tokens, taxas) {
  * Cota quanto de `tokenEntrada` é preciso para obter `quantidadePol` (wei) de POL.
  * Tenta pool direto em várias taxas e, se não houver, rota via USDC. Escolhe o mais barato.
  */
-export async function cotarAbastecimento(provider, chainId, tokenEntrada, quantidadePol) {
+export async function cotarAbastecimento(provider, chainId, tokenEntrada, quantidadePol, info = { decimais: 18, moeda: "BRL" }) {
   const rede = REDES[chainId];
   if (!rede?.uniswap) throw new Error("Auto-swap indisponível nesta rede");
   const u = rede.uniswap;
@@ -127,6 +127,11 @@ export async function cotarAbastecimento(provider, chainId, tokenEntrada, quanti
   rotas.sort((a, b) => (a.entrada < b.entrada ? -1 : 1));
   const melhor = rotas[0];
   const maximo = (melhor.entrada * (10_000n + TANQUE.slippageMaxBps)) / 10_000n;
+  // Trava de sanidade: nunca pagar mais que o preço-teto por POL, mesmo que o RPC diga o contrário.
+  const teto = e().parseUnits(TANQUE.precoMaximoPorPol[info.moeda || "BRL"], info.decimais);
+  if (maximo * 10n ** 18n > teto * quantidadePol) {
+    throw new Error("Cotação fora do normal — troca bloqueada por segurança. Tente mais tarde ou use outro token.");
+  }
   return {
     chainId,
     tokenEntrada,
@@ -202,7 +207,7 @@ export async function abastecerSeNecessario(provider, signer, chainId, tokensPre
   if (!est.precisaAbastecer || !est.podePagarSwap) return null;
   for (const t of tokensPreferidos) {
     try {
-      const cot = await cotarAbastecimento(provider, chainId, t.endereco, est.faltam);
+      const cot = await cotarAbastecimento(provider, chainId, t.endereco, est.faltam, t);
       const bal = await new (e().Contract)(t.endereco, ABI_ERC20, provider).balanceOf(dono);
       if (bal >= cot.entradaMaxima) {
         const recibo = await abastecer(signer, cot, opcoesTx);

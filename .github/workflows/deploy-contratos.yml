@@ -116,9 +116,7 @@ jobs:
       - name: Verificar código-fonte (Sourcify)
         continue-on-error: true
         working-directory: contracts
-        run: |
-          forge script script/DeployPolygon.s.sol:DeployPolygon --rpc-url "$RPC" --private-key "$CHAVE" \
-            --resume --verify --verifier sourcify
+        run: ./script/verificar.sh "$CHAIN"
 
       - name: Gravar endereços na main
         run: |
@@ -134,7 +132,7 @@ jobs:
         run: gh workflow run ci-deploy.yml --ref main
 
       - name: Devolver o POL que sobrou ao CREATOR_TREASURY
-        if: always() && inputs.rede == 'polygon'
+        if: always()
         continue-on-error: true
         run: |
           saldo=$(cast balance "$DEPLOYER" --rpc-url "$RPC")

@@ -1,0 +1,19 @@
+{
+  "name": "xBRL — Carteira do Real Soberano",
+  "short_name": "xBRL",
+  "description": "Carteira de autocustódia do xBRL na Polygon: envie, guarde, renda e contrate trabalho sem intermediário.",
+  "lang": "pt-BR",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#03231A",
+  "theme_color": "#03231A",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

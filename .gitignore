@@ -1,0 +1,18 @@
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/*/31337/
+contracts/broadcast/**/dry-run/
+
+# Implantação local (Anvil) — nunca publicar
+wallet/src/deployments/31337.json
+
+# Segredos
+.env
+*.key
+keystore*/
+
+# Sistema
+.DS_Store
+node_modules/
+_site/

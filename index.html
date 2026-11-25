@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#03231A">
+  <meta name="color-scheme" content="dark">
+  <title>xBRL — O Real Soberano & Inconfiscável na Polygon</title>
+  <meta name="description" content="xBRL é um Real digital 1:1, lastreado em stablecoins de Real, sem congelamento nem confisco. Carteira própria e marketplace de trabalho sem intermediário.">
+  <meta property="og:title" content="xBRL — O Real Soberano & Inconfiscável">
+  <meta property="og:description" content="1 xBRL = R$ 1. Lastro 100% verificável na Polygon. Ninguém congela, ninguém confisca.">
+  <meta property="og:image" content="wallet/icons/icon-512.png">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="wallet/icons/icon-192.png" type="image/png">
+  <style>
+    :root {
+      --e950: #021912; --e900: #03231A; --e800: #063B2C; --e700: #0A5A43; --e500: #10B981; --e300: #6EE7B7; --e100: #D1FAE5;
+      --o600: #B8901F; --o500: #D4AF37; --o400: #E9C46A; --o300: #F5D98B;
+      --txt: #ECFDF5; --mudo: #9CC7B6; --aviso: #FBBF24;
+      --fonte: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; font-family: var(--fonte); color: var(--txt); line-height: 1.55; font-size: 17px;
+      background: radial-gradient(1400px 700px at 70% -250px, #0E5A43 0%, var(--e900) 50%, var(--e950) 100%) fixed; }
+    a { color: var(--o400); }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+    header { position: sticky; top: 0; z-index: 10; background: rgba(3,35,26,.82); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(212,175,55,.18); }
+    header .wrap { display: flex; align-items: center; gap: 18px; height: 64px; }
+    .marca { display: flex; align-items: center; gap: 10px; font-weight: 900; font-size: 21px; text-decoration: none; color: var(--txt); }
+    .marca img { width: 34px; height: 34px; border-radius: 9px; }
+    .marca b { color: var(--o400); }
+    nav { margin-left: auto; display: flex; gap: 18px; font-size: 15px; }
+    nav a { color: var(--mudo); text-decoration: none; }
+    nav a:hover { color: var(--o300); }
+    .cta { display: inline-block; padding: 14px 22px; border-radius: 14px; font-weight: 800; text-decoration: none; }
+    .cta.ouro { background: linear-gradient(180deg, var(--o400), var(--o500)); color: var(--e900); box-shadow: 0 8px 24px rgba(212,175,55,.3); }
+    .cta.linha { border: 1px solid rgba(110,231,183,.4); color: var(--e100); }
+    header .cta { padding: 9px 14px; font-size: 15px; }
+    .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 40px; align-items: center; padding: 72px 0 56px; }
+    .hero h1 { font-size: clamp(38px, 5.6vw, 64px); line-height: 1.04; margin: 0 0 18px; letter-spacing: -1px; }
+    .hero h1 em { font-style: normal; background: linear-gradient(90deg, var(--o300), var(--o500)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .hero p.lead { font-size: 20px; color: var(--e100); max-width: 560px; }
+    .acoes { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 26px; }
+    .moeda { aspect-ratio: 1; max-width: 360px; margin: 0 auto; border-radius: 50%; display: grid; place-items: center;
+      background: conic-gradient(from 200deg, var(--o300), var(--o500), var(--o600), var(--o400), var(--o300));
+      box-shadow: 0 30px 80px rgba(212,175,55,.25), inset 0 0 0 14px rgba(3,35,26,.18); color: var(--e900); text-align: center; }
+    .moeda strong { display: block; font-size: clamp(60px, 8vw, 104px); font-weight: 900; line-height: .9; }
+    .moeda span { font-weight: 800; letter-spacing: 5px; }
+    .faixa { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 10px 0 40px; }
+    .faixa div { background: rgba(10,90,67,.35); border: 1px solid rgba(110,231,183,.16); border-radius: 16px; padding: 16px; }
+    .faixa b { display: block; font-size: 24px; color: var(--o300); }
+    section { padding: 56px 0; border-top: 1px solid rgba(110,231,183,.08); }
+    h2 { font-size: clamp(28px, 3.6vw, 40px); margin: 0 0 10px; letter-spacing: -.5px; }
+    .sub { color: var(--mudo); max-width: 720px; margin: 0 0 28px; }
+    .grade { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grade.duas { grid-template-columns: repeat(2, 1fr); }
+    .grade.quatro { grid-template-columns: repeat(4, 1fr); }
+    .card { background: linear-gradient(180deg, rgba(10,90,67,.5), rgba(6,59,44,.5)); border: 1px solid rgba(110,231,183,.16); border-radius: 20px; padding: 22px; }
+    .card.ouro { border-color: rgba(212,175,55,.45); background: linear-gradient(160deg, rgba(212,175,55,.14), rgba(6,59,44,.6) 60%); }
+    .card .ic { font-size: 34px; }
+    .card h3 { margin: 8px 0 6px; font-size: 20px; }
+    .card p, .card li { color: var(--e100); font-size: 16px; }
+    .card ul { padding-left: 18px; margin: 8px 0 0; }
+    .selo { display: inline-block; font-size: 12px; font-weight: 800; padding: 3px 9px; border-radius: 99px; background: rgba(212,175,55,.16); color: var(--o300); border: 1px solid rgba(212,175,55,.35); }
+    .fases { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .passos { counter-reset: n; list-style: none; padding: 0; display: grid; gap: 12px; }
+    .passos li { counter-increment: n; display: flex; gap: 14px; align-items: flex-start; }
+    .passos li::before { content: counter(n); flex: 0 0 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; background: var(--o500); color: var(--e900); }
+    table { width: 100%; border-collapse: collapse; font-size: 15px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(110,231,183,.12); vertical-align: top; }
+    th { color: var(--mudo); font-weight: 600; }
+    td code, .mono { font-family: var(--mono); font-size: 13.5px; word-break: break-all; }
+    details { background: rgba(10,90,67,.3); border: 1px solid rgba(110,231,183,.14); border-radius: 14px; padding: 14px 18px; margin: 10px 0; }
+    summary { cursor: pointer; font-weight: 700; }
+    .aviso { border-left: 4px solid var(--aviso); background: rgba(251,191,36,.08); padding: 14px 16px; border-radius: 12px; color: var(--e100); }
+    footer { padding: 40px 0 60px; color: var(--mudo); font-size: 14px; border-top: 1px solid rgba(212,175,55,.15); }
+    @media (max-width: 880px) {
+      .hero, .fases, .grade, .grade.duas, .grade.quatro, .faixa { grid-template-columns: 1fr; }
+      nav { display: none; }
+      .hero { padding-top: 40px; }
+      .moeda { max-width: 240px; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <a class="marca" href="#"><img src="wallet/icons/icon-192.png" alt=""><span>x<b>BRL</b></span></a>
+    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
+    <a class="cta ouro" href="wallet/">Abrir carteira</a>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <span class="selo">Polygon PoS · código aberto</span>
+      <h1>O Real <em>soberano</em> e inconfiscável.</h1>
+      <p class="lead">1 xBRL = R$ 1, lastreado 1:1 em stablecoins de Real e verificável a qualquer momento na blockchain. Sem banco no meio, sem congelamento, sem confisco: a chave fica no seu celular.</p>
+      <div class="acoes">
+        <a class="cta ouro" href="wallet/">Criar minha carteira grátis</a>
+        <a class="cta linha" href="#como">Entender em 2 minutos</a>
+      </div>
+    </div>
+    <div class="moeda" aria-hidden="true"><div><span>xBRL</span><strong>R$</strong><span>1 = 1</span></div></div>
+  </div>
+
+  <div class="faixa">
+    <div><b>100%</b>lastro em stablecoins de Real, auditável on-chain</div>
+    <div><b>0</b>botões de congelar, pausar ou confiscar saldo</div>
+    <div><b>0,1%</b>taxa única e transparente por movimentação</div>
+    <div><b>0</b>servidores: carteira roda inteira no seu aparelho</div>
+  </div>
+
+  <section id="como">
+    <h2>Como funciona</h2>
+    <p class="sub">Três contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
+    <div class="grade">
+      <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
+      <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega BRZ ou BRLA e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
+      <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. GPS, código de entrega e reputação pública.</p></div>
+    </div>
+  </section>
+
+  <section id="reserva">
+    <h2>Lastro em duas fases</h2>
+    <p class="sub">A regra muda sozinha pelo volume em circulação. Em nenhuma fase o lastro pode ficar abaixo de 100% — isso é verificado por testes automáticos de fuzzing a cada mudança no código.</p>
+    <div class="fases">
+      <div class="card"><span class="selo">Fase 1 · até 1 milhão de xBRL</span><h3>Paridade estrita</h3>
+        <ul><li>Entra 1 real em stablecoin, sai 1 xBRL (menos 0,1%).</li><li>Resgate 1:1 a qualquer hora, sem limite.</li><li>Nada de spread, nada de janela.</li></ul></div>
+      <div class="card ouro"><span class="selo">Fase 2 · a partir de 1 milhão</span><h3>Estabilização algorítmica</h3>
+        <ul><li>Alvo de diversificação entre os lastros (1/N para cada).</li><li>Usar um lastro já concentrado paga spread de até 0,40% — que fica na reserva como lastro extra (&gt;100%).</li><li>Resgate de até 20% do total por 24 h, contra corrida bancária.</li><li>Novo lastro só entra com 7 dias de aviso público.</li></ul></div>
+    </div>
+  </section>
+
+  <section id="trabalho">
+    <h2>Marketplace de trabalho, sem intermediário</h2>
+    <p class="sub">O cliente trava o pagamento no contrato. O trabalhador recebe quando a regra da modalidade é cumprida. Taxa de 0,1% só no pagamento.</p>
+    <div class="grade quatro">
+      <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>Check-in GPS a até 80 m do local. Libera pelo aceite, pelo código ou em 3 dias sem contestação.</p></div>
+      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>GPS no destino + código secreto de 5 palavras que só o destinatário tem. Código certo = pagamento na hora.</p></div>
+      <div class="card"><div class="ic">💻</div><h3>Remoto</h3><p>Trabalhador marca entregue; cliente aprova ou, depois de 3 dias de silêncio, o valor é liberado.</p></div>
+      <div class="card"><div class="ic">🧱</div><h3>Por etapas</h3><p>De 2 a 50 parcelas iguais, cada uma com a mesma regra do remoto.</p></div>
+    </div>
+    <div class="grade duas" style="margin-top:16px">
+      <div class="card"><h3>⚖️ Disputa sem juiz</h3><p>Cada lado propõe uma divisão. Propostas iguais resolvem na hora. Sem acordo em 30 dias, qualquer pessoa executa 50/50.</p></div>
+      <div class="card"><h3>⭐ Reputação de 0 a 5</h3><p>Trabalhos concluídos, estrelas e taxa de disputas — tudo público e calculado pelo próprio contrato.</p></div>
+    </div>
+  </section>
+
+  <section id="carteira">
+    <h2>A carteira nativa</h2>
+    <p class="sub">Um app instalável (PWA) para Android e iPhone, que funciona sem cadastro e sem servidor.</p>
+    <ol class="passos">
+      <li><div><b>12 palavras são a sua conta.</b> Geradas no aparelho (padrão BIP-39) e cifradas com AES-256-GCM pelo seu PIN, ou pela biometria com chave no chip do celular.</div></li>
+      <li><div><b>Tanque de gás transparente.</b> Guarda até 3,0 POL para as taxas da rede e reabastece trocando seus tokens na Uniswap, com perda máxima de 1% de preço.</div></li>
+      <li><div><b>Telas travadas.</b> Dinheiro só se move segurando o botão de confirmar; a carteira bloqueia sozinha em 5 minutos.</div></li>
+    </ol>
+    <a class="cta ouro" href="wallet/" style="margin-top:14px">Abrir a carteira</a>
+  </section>
+
+  <section id="seguranca">
+    <h2>Segurança e honestidade</h2>
+    <div class="grade">
+      <div class="card"><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo de ninguém.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar a taxa de 0,1%.</li><li>Atualizar os contratos.</li></ul></div>
+      <div class="card"><h3>O que o administrador pode</h3><ul><li>Propor novo lastro (entra só após 7 dias).</li><li>Pausar a <em>emissão</em> com um lastro que perdeu a paridade.</li></ul><p>Só isso — e está no código.</p></div>
+      <div class="card"><h3>Riscos que existem</h3><ul><li>Os lastros (BRZ, BRLA) dependem de seus emissores.</li><li>Os contratos têm testes amplos, mas ainda não passaram por auditoria externa.</li><li>Perder as 12 palavras = perder o acesso.</li></ul></div>
+    </div>
+  </section>
+
+  <section id="contratos">
+    <h2>Contratos</h2>
+    <p class="sub">Endereços lidos dos arquivos públicos de implantação deste site. Confira sempre no PolygonScan.</p>
+    <div class="card" id="tabela-contratos"><p class="mudo">Carregando…</p></div>
+    <p class="mudo" style="margin-top:12px">Taxa vitalícia de 0,1% para a carteira do criador: <span class="mono">0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1</span></p>
+  </section>
+
+  <section id="faq">
+    <h2>Perguntas frequentes</h2>
+    <details><summary>xBRL é dinheiro de verdade?</summary><p>É um token que vale R$ 1 porque cada unidade é lastreada por R$ 1 em stablecoins de Real (BRZ, BRLA) guardadas no contrato da Reserva, e pode ser resgatada por elas a qualquer momento.</p></details>
+    <details><summary>Preciso de cadastro?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para trocar reais por BRZ/BRLA você usa a corretora ou o emissor de sua preferência.</p></details>
+    <details><summary>xBRL rende juros?</summary><p>Não. xBRL não promete nem paga rendimento. Ele é um Real digital que você controla sozinho.</p></details>
+    <details><summary>Quanto custa?</summary><p>0,1% por transferência entre carteiras, emissão, resgate ou pagamento de trabalho. A rede Polygon cobra centavos de POL por operação.</p></details>
+    <details><summary>E se o site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby…).</p></details>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><b>xBRL</b> — O Real Soberano &amp; Inconfiscável na Rede Polygon. Software livre, sem garantias. Não é instituição financeira, não é investimento, não paga rendimento e não tem garantia do FGC. Use por sua conta e risco.</p>
+    <p><a href="wallet/">Carteira</a> · <a href="https://github.com/digitalrobertlima/xBRL" rel="noopener">Código-fonte</a></p>
+  </div>
+</footer>
+
+<script>
+  (async () => {
+    const redes = [[137, "Polygon PoS", "https://polygonscan.com"], [80002, "Polygon Amoy (teste)", "https://amoy.polygonscan.com"]];
+    const nomes = ["xBRL", "ReservaBRL", "EscrowTrabalho"];
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+    let html = "<table><thead><tr><th>Contrato</th>" + redes.map((r) => `<th>${r[1]}</th>`).join("") + "</tr></thead><tbody>";
+    const dados = await Promise.all(redes.map(([id]) => fetch(`wallet/src/deployments/${id}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));
+    for (const n of nomes) {
+      html += `<tr><td><b>${n}</b></td>` + redes.map(([, , exp], i) => {
+        const a = dados[i]?.[n];
+        return `<td>${a && /^0x[0-9a-fA-F]{40}$/.test(a) ? `<a class="mono" href="${exp}/address/${esc(a)}" target="_blank" rel="noopener">${esc(a)}</a>` : '<span class="mudo">aguardando implantação</span>'}</td>`;
+      }).join("") + "</tr>";
+    }
+    document.getElementById("tabela-contratos").innerHTML = html + "</tbody></table>";
+  })();
+</script>
+</body>
+</html>

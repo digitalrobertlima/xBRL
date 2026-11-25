@@ -6,7 +6,7 @@ CHAIN="${1:?informe o chainId}"
 J="../wallet/src/deployments/${CHAIN}.json"
 x() { jq -r "$1" "$J"; }
 TOKEN=$(x .xBRL); RESERVA=$(x .ReservaBRL); ESCROW=$(x .EscrowTrabalho)
-COFRE=$(x .CofreCripto); MENSAGEIRO=$(x .Mensageiro)
+COFRE=$(x .CofreCripto); MENSAGEIRO=$(x .Mensageiro); ENCAMINHADOR=$(x .Encaminhador)
 DEPLOYER=$(x .deployer); TREASURY=$(x .treasury)
 LASTROS=$(x '.lastros | join(",")')
 TETO=$(cast call "$RESERVA" "TETO_RESERVA()(uint256)" --rpc-url "${RPC:-http://127.0.0.1:8545}" | awk '{print $1}')
@@ -18,7 +18,8 @@ v() { # endereço  contrato  args
 v "$TOKEN" src/xBRL.sol:xBRL "--constructor-args $(cast abi-encode 'f(address)' "$DEPLOYER")"
 v "$COFRE" src/CofreCripto.sol:CofreCripto "--constructor-args $(x .argsCofre)"
 v "$RESERVA" src/ReservaBRL.sol:ReservaBRL "--constructor-args $(cast abi-encode 'f(address,address,address,address[],address,uint256)' "$TOKEN" "$TREASURY" "$COFRE" "[$LASTROS]" "$TREASURY" "$TETO")"
-v "$ESCROW" src/EscrowTrabalho.sol:EscrowTrabalho "--constructor-args $(cast abi-encode 'f(address,address,address)' "$TOKEN" "$TREASURY" "$COFRE")"
-v "$MENSAGEIRO" src/Mensageiro.sol:Mensageiro ""
+v "$ENCAMINHADOR" src/Encaminhador.sol:Encaminhador ""
+v "$ESCROW" src/EscrowTrabalho.sol:EscrowTrabalho "--constructor-args $(cast abi-encode 'f(address,address,address,address)' "$TOKEN" "$TREASURY" "$COFRE" "$ENCAMINHADOR")"
+v "$MENSAGEIRO" src/Mensageiro.sol:Mensageiro "--constructor-args $(cast abi-encode 'f(address)' "$ENCAMINHADOR")"
 echo "Falhas: $falhas"
 exit "$falhas"

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0A2118">
+  <meta name="color-scheme" content="dark">
+  <title>Guia: criar a pool do BRLS na Uniswap</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="wallet/icons/icon-192.png" type="image/png">
+  <link rel="stylesheet" href="wallet/estilo.css">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body class="site guia-pool">
+<header class="cab"><a id="marca" class="marca-link" href="./" aria-label="BRLS, página inicial"></a><a class="btn prim pequeno" href="wallet/">Abrir a carteira</a></header>
+<main>
+  <section>
+    <h1>Criar a pool do BRLS na Uniswap</h1>
+    <p class="sub">Uma pool é um “caixa de troca” público: quem tem BRZ troca por BRLS (e vice-versa) sem passar pela Reserva. Quem cria a pool coloca as duas moedas e ganha uma pequena parte de cada troca. A primeira pool recomendada é <b>BRLS / BRZ</b>, porque as duas valem R$ 1.</p>
+    <div class="cartao">
+      <div class="linha"><span>BRLS (Polygon)</span><span class="quem" id="end-brls">carregando…</span></div>
+      <div class="linha"><span>BRZ (Polygon)</span><span class="quem">0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc</span></div>
+      <div class="linha"><span>USDC (Polygon)</span><span class="quem">0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>O que você precisa antes</h2>
+    <ul class="sub">
+      <li>Uns <b>R$ 100 em BRZ</b> na sua carteira (exemplo; pode ser mais ou menos).</li>
+      <li>Uns <b>2 POL</b> para as taxas.</li>
+      <li>Uma carteira que conecte em sites, como <b>MetaMask</b> ou <b>Rabby</b> no celular. Você pode importar nela as mesmas 12 palavras da carteira BRLS: é a mesma conta, em outro aplicativo. Faça isso só em aplicativo oficial, baixado da loja.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Passo a passo</h2>
+    <ol class="passos grande">
+      <li><b>Divida o BRZ ao meio</b><p>Na carteira BRLS, aba Reserva, troque metade do BRZ por BRLS (ex.: 50 BRZ viram 49,95 BRLS). Agora você tem as duas moedas.</p></li>
+      <li><b>Abra a Uniswap conectada</b><p>No navegador da MetaMask/Rabby, abra <b>app.uniswap.org</b>, toque em <b>Pool</b> e depois em <b>Nova posição</b>. Confirme que a rede é <b>Polygon</b>.</p></li>
+      <li><b>Escolha as duas moedas</b><p>No primeiro campo, cole o endereço do BRLS (acima). No segundo, o do BRZ. Confira o nome que aparece: tem que ser “Real Soberano”. A Uniswap vai avisar que o token não está na lista dela; é normal para moeda nova. Confira o endereço e siga.</p></li>
+      <li><b>Taxa da pool: 0,01%</b><p>É a faixa certa para duas moedas que valem a mesma coisa.</p></li>
+      <li><b>Preço inicial: 1</b><p>Como a pool ainda não existe, você define o preço: <b>1 BRZ = 1 BRLS</b>. Errar aqui faz a pool nascer com preço errado, então confira duas vezes.</p></li>
+      <li><b>Faixa de preço: 0,98 a 1,02</b><p>Seu dinheiro trabalha só perto de R$ 1, onde acontecem quase todas as trocas. Se preferir não pensar nisso, escolha “faixa completa” (rende menos, mas nunca sai da faixa).</p></li>
+      <li><b>Valores e autorizações</b><p>Digite quanto quer colocar (ex.: 49 BRLS e 49 BRZ). A Uniswap pede para autorizar cada moeda: prefira autorizar <b>só o valor exato</b>, não “ilimitado”. Depois confirme “Adicionar”.</p></li>
+      <li><b>Pronto</b><p>Você recebe um NFT da posição (é o seu comprovante de dono da pool). Qualquer pessoa já pode trocar BRZ por BRLS ali. Para sair, abra a posição e toque em “Remover liquidez”.</p></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Segunda pool (opcional): BRLS / USDC</h2>
+    <p class="sub">Serve para quem tem dólar digital. Taxa 0,05%. Preço inicial = cotação do dólar em reais (ex.: se 1 USDC = R$ 5,90, então 1 BRLS = 0,1695 USDC). Use faixa larga, porque o dólar varia.</p>
+  </section>
+
+  <section>
+    <h2>Riscos de quem coloca dinheiro na pool</h2>
+    <ul class="sub">
+      <li>Se o BRZ perder o valor, a pool fica cheia de BRZ: quem estiver nela fica com a moeda ruim.</li>
+      <li>Na pool com USDC, se o dólar mudar muito, você termina com proporções diferentes das que colocou.</li>
+      <li>A Uniswap é um aplicativo de terceiros. O BRLS não controla nem garante nada lá.</li>
+    </ul>
+  </section>
+</main>
+<footer class="rodape"><p><a href="./">Voltar à página do BRLS</a></p></footer>
+<script type="module" src="guia-pool.js"></script>
+</body>
+</html>

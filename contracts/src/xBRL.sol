@@ -49,7 +49,7 @@ contract xBRL is ERC20, ERC20Permit {
     error AssinaturaInvalida();
     error RelayerNaoAutorizado(address esperado, address recebido);
 
-    constructor(address inicializador) ERC20("xBRL Real Soberano", "xBRL") ERC20Permit("xBRL Real Soberano") {
+    constructor(address inicializador) ERC20("Real Soberano", "BRLS") ERC20Permit("Real Soberano") {
         if (inicializador == address(0)) revert EnderecoZero();
         _inicializador = inicializador;
     }

@@ -5,7 +5,7 @@ const path = require("path");
 const { ethers } = require("../../wallet/src/vendor/ethers.umd.min.js");
 
 const raiz = path.join(__dirname, "..");
-const contratos = ["xBRL", "ReservaBRL", "EscrowTrabalho"];
+const contratos = ["xBRL", "ReservaBRL", "EscrowTrabalho", "CofreCripto", "Mensageiro"];
 const saida = {};
 for (const nome of contratos) {
   const art = JSON.parse(fs.readFileSync(path.join(raiz, "out", `${nome}.sol`, `${nome}.json`), "utf8"));

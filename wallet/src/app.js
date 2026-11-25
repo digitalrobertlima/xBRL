@@ -5,10 +5,11 @@
 // - Ações que movem dinheiro exigem "segurar para confirmar"; desbloqueio exige "deslizar" + PIN.
 // - Chegada ao local é comprovada por código/QR (palavras), nunca por GPS (falsificável).
 // =====================================================================
-import { ABIS, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
+import { ABIS, COFRE, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, TANQUE, VERSAO, carregarImplantacao, linkExplorer } from "./config.js";
 import * as K from "./keystore.js";
 import * as G from "./gas-tank.js";
-import { EscrowClient, NOMES_NIVEL, REGRAS_NIVEL, codigoGuardado, codigoTemFormatoValido, gerarCodigoEntrega, guardarCodigo, hashChegada, hashCodigo, normalizarCodigo } from "./escrow-client.js";
+import { EscrowClient, REGRAS_NIVEL, codigoGuardado, codigoTemFormatoValido, gerarCodigoEntrega, guardarCodigo, hashChegada, hashCodigo, hashDevolucao, idConversa, normalizarCodigo } from "./escrow-client.js";
+import { Chat, MAX_CARACTERES } from "./chat.js";
 import qrcode from "./vendor/qrcode.mjs";
 
 const E = globalThis.ethers;
@@ -40,7 +41,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR"],
@@ -67,7 +68,7 @@ function ir(destino, params = {}) {
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
-  const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
+  const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
   if (aberta) history.replaceState({ tela: destino }, "", location.pathname + location.search);
   window.scrollTo(0, 0);
@@ -126,6 +127,19 @@ const MENSAGENS = {
   PrazoInvalido: "Prazo inválido.",
   EstadoInvalido: "O trabalho mudou de situação. Atualize a tela.",
   JaAvaliou: "Você já avaliou este trabalho.",
+  TetoDaReservaAtingido: "A versão beta tem um teto pequeno de reserva e ele foi atingido. Obrigado por testar!",
+  ArbitroInvalido: "Árbitro inválido: precisa ser outra pessoa (nem o cliente, nem o trabalhador).",
+  CaucaoInvalida: "Regra da caução: a mercadoria só sai com o código de entrega ou de devolução.",
+  SemDisputaNaEntrega: "Entrega não tem disputa: só o código de entrega (ou de devolução) resolve.",
+  ForaDoIntervaloDosArbitros: "O desempate precisa ficar entre as propostas dos dois árbitros.",
+  AguardandoArbitros: "Ainda é a vez dos árbitros (3 dias).",
+  PrecoIndisponivel: "Preço da cripto indisponível ou divergente agora. Pagar dívida e depositar continuam liberados.",
+  GarantiaInsuficiente: "Garantia insuficiente para isso. Deposite mais ou emita menos.",
+  TetoDeDivida: "O teto de emissão deste cofre foi atingido (limite da versão beta).",
+  DividaMinima: "A dívida precisa ser zero ou pelo menos 10 xBRL.",
+  PosicaoSaudavel: "Essa posição está saudável: não pode ser liquidada.",
+  ColateralInsuficiente: "Você não tem essa quantidade depositada.",
+  MensagemInvalida: "Mensagem grande demais.",
   ERC20InsufficientBalance: "Saldo insuficiente.",
   ERC20InsufficientAllowance: "Autorização insuficiente.",
 };
@@ -230,6 +244,7 @@ async function conectarRede(chainId) {
   }
   S.imp = await carregarImplantacao(chainId);
   S.escrow = S.imp ? new EscrowClient(S.provider, chainId, S.imp.EscrowTrabalho, S.imp.blocoInicial) : null;
+  S.chat = S.imp ? new Chat(S.provider, S.imp.Mensageiro, S.imp.blocoInicial) : null;
   const chip = $("#rede");
   chip.textContent = S.rede.curto;
   chip.classList.toggle("teste", chainId !== 137);
@@ -247,12 +262,13 @@ async function montarListaTokens() {
       conhecidos.add(t.endereco.toLowerCase());
     }
   }
-  for (const l of S.imp?.lastros || []) {
+  const extras = [...(S.imp?.lastros || []).map((l) => [l, true]), ...(S.imp?.criptos || []).map((l) => [l, false])];
+  for (const [l, ehLastro] of extras) {
     if (conhecidos.has(l.toLowerCase())) continue;
     try {
       const c = new E.Contract(l, ["function symbol() view returns (string)", "function decimals() view returns (uint8)"], S.provider);
       const [simbolo, decimais] = await Promise.all([c.symbol(), c.decimals()]);
-      lista.push({ simbolo: String(simbolo).slice(0, 12), nome: "Lastro", endereco: l, decimais: Number(decimais), lastro: true });
+      lista.push({ simbolo: String(simbolo).slice(0, 12), nome: ehLastro ? "Lastro" : "Cripto", endereco: l, decimais: Number(decimais), lastro: ehLastro, cripto: !ehLastro });
       conhecidos.add(l.toLowerCase());
     } catch { /* lastro ilegível: ignora na lista */ }
   }
@@ -510,6 +526,7 @@ TELAS.INICIO = async () => {
   const saldoX = xi >= 0 ? saldos[xi] : 0n;
   tela(`
     ${S.imp ? "" : `<div class="aviso">O protocolo xBRL ainda não foi implantado na rede ${esc(S.rede.nome)}. Você já pode guardar e enviar POL e stablecoins.</div>`}
+    ${S.imp?.beta ? `<div class="aviso">🧪 <b>Versão beta na rede real.</b> Limites baixos de propósito (reserva até R$ 1.000, cofre até R$ 500 por cripto). Contratos ainda não auditados: use só valores pequenos.</div>` : ""}
     <div class="cartao ouro">
       <p class="mudo">Saldo em xBRL</p>
       <div class="saldo">${fmt(saldoX)}<small>xBRL</small></div>
@@ -522,6 +539,7 @@ TELAS.INICIO = async () => {
       <button class="atalho" data-acao="modo-resgatar"><span>💵</span>Resgatar</button>
       <button class="atalho" data-ir="TRABALHOS"><span>🤝</span>Trabalhos</button>
       <button class="atalho" data-ir="TANQUE"><span>⛽</span>Tanque</button>
+      <button class="atalho" data-ir="COFRE"><span>🏦</span>Cofre cripto</button>
     </div>
     <div class="cartao">
       <div class="linha"><b>⛽ Tanque de gás</b><span>${fmt(pol, 18, 3)} ${esc(S.rede.nativo.simbolo)} / ${TANQUE.alvoPol}</span></div>
@@ -574,7 +592,8 @@ TELAS.ENVIAR = () => {
 TELAS.RESERVA = async () => {
   if (!S.imp) return tela(`<h1>Reserva</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
   const r = c("ReservaBRL");
-  const [fase, total, colat, supply, janela] = await Promise.all([r.fase(), r.lastroTotal(), r.colateralizacaoBps(), c("xBRL").totalSupply(), r.resgateDisponivelNaJanela()]);
+  const k = c("CofreCripto");
+  const [fase, total, colat, supply, janela, colchao, dividaCofre, ruim, teto] = await Promise.all([r.fase(), r.lastroTotal(), r.colateralizacaoBps(), c("xBRL").totalSupply(), r.resgateDisponivelNaJanela(), k.colchao(), k.dividaTotalGlobal(), k.dividaRuim(), r.TETO_RESERVA()]);
   const lastros = S.tokensInfo.filter((t) => t.lastro && S.imp.lastros.map((x) => x.toLowerCase()).includes(t.endereco.toLowerCase()));
   const modo = S.params.modo || "emitir";
   const colatTxt = colat > 10n ** 30n ? "—" : `${(Number(colat) / 100).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
@@ -586,7 +605,13 @@ TELAS.RESERVA = async () => {
       <div class="linha"><span>Lastro total</span><b>${reais(total)}</b></div>
       <div class="linha"><span>Colateralização</span><b>${colatTxt}</b></div>
       ${Number(fase) === 2 ? `<div class="linha"><span>Resgate livre nas 24 h</span><b>${fmt(janela)}</b></div>` : ""}
+      <div class="linha"><span>xBRL emitido no cofre cripto</span><b>${fmt(dividaCofre)}</b></div>
+      <div class="linha"><span>🛟 Colchão de proteção</span><b>${fmt(colchao)} xBRL</b></div>
+      ${ruim > 0n ? `<div class="linha"><span>Prejuízo descoberto (público)</span><b>${fmt(ruim)}</b></div>` : ""}
+      ${teto > 0n ? `<div class="linha"><span>Teto da beta</span><b>${reais(teto)}</b></div>` : ""}
+      <p class="mudo">Metade de toda taxa vai ao colchão, que cobre prejuízo se uma cripto despencar rápido demais.</p>
     </div>
+    <button class="btn sec" data-ir="COFRE">🏦 Emitir xBRL com garantia em cripto</button>
     <div class="seg" role="group" aria-label="Operação">
       <button data-acao="modo-emitir" aria-pressed="${modo === "emitir"}">Comprar xBRL</button>
       <button data-acao="modo-resgatar" aria-pressed="${modo === "resgatar"}">Resgatar em reais</button>
@@ -649,6 +674,108 @@ TELAS.TANQUE = async () => {
   });
 };
 
+// ---------- Cofre cripto ----------
+const pct = (bps) => `${(Number(bps) / 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+const INFINITO = 2n ** 255n;
+
+/** Lê o cofre inteiro: ativos, preços e a posição do usuário. */
+async function lerCofre() {
+  const k = c("CofreCripto");
+  const n = Number(await k.totalAtivos());
+  const ativos = [];
+  for (let i = 0; i < n; i++) {
+    const [a, pos, [preco, ok], [precoEmissao, okEmissao], [razao], livre] = await Promise.all([k.ativo(i), k.posicao(i, S.endereco), k.precoBrl(i), k.precoParaEmitir(i), k.razaoGarantia(i, S.endereco), k.emissaoDisponivel(i)]);
+    const info = S.tokensInfo.find((t) => t.endereco.toLowerCase() === a.token.toLowerCase());
+    const valorGarantia = ok ? (pos.colateral * preco) / 10n ** BigInt(a.decimais) : 0n;
+    // Quanto ainda dá para emitir mantendo a garantia mínima (taxa de 0,5% entra na dívida)
+    let podeEmitir = 0n;
+    if (okEmissao) {
+      const maxDivida = ((pos.colateral * precoEmissao) / 10n ** BigInt(a.decimais) * 10_000n) / BigInt(a.crEmissaoBps);
+      if (maxDivida > pos.divida) podeEmitir = ((maxDivida - pos.divida) * 10_000n) / (10_000n + BigInt(COFRE.taxaEmissaoBps));
+      if (podeEmitir > livre) podeEmitir = livre;
+    }
+    // Preço em que a posição pode ser liquidada
+    const precoLiquidacao = pos.colateral > 0n && pos.divida > 0n ? (pos.divida * BigInt(a.crLiquidacaoBps) * 10n ** BigInt(a.decimais)) / (10_000n * pos.colateral) : 0n;
+    ativos.push({ i, a, pos, preco, ok, okEmissao, razao, livre, info, valorGarantia, podeEmitir, precoLiquidacao, simbolo: info?.simbolo || `Cripto ${i}`, decimais: Number(a.decimais) });
+  }
+  return ativos;
+}
+
+TELAS.COFRE = async () => {
+  if (!S.imp) return tela(`<h1>Cofre cripto</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
+  tela(`<h1>🏦 Cofre cripto</h1><div class="cartao"><div class="giro"></div></div>`);
+  const ativos = await lerCofre();
+  const sel = Math.min(Number(S.params.ativo ?? 0), ativos.length - 1);
+  const x = ativos[sel];
+  const modo = S.params.modo || "depositar";
+  const saldoTok = await erc20(x.a.token).balanceOf(S.endereco).catch(() => 0n);
+  const saldoX = await c("xBRL").balanceOf(S.endereco);
+  S.params.cofre = { x, saldoTok, saldoX };
+  const saude = x.pos.divida === 0n ? "sem dívida" : x.razao >= INFINITO ? "—" : pct(x.razao);
+  const perto = x.pos.divida > 0n && x.razao < BigInt(x.a.crLiquidacaoBps) + 2_000n;
+  const MODOS = { depositar: "Depositar", emitir: "Emitir xBRL", quitar: "Pagar dívida", retirar: "Retirar" };
+  tela(`
+    <h1>🏦 Cofre cripto</h1>
+    <p class="mudo">Deposite cripto como garantia e emita xBRL sem vender. A garantia continua sua: ninguém mexe nela enquanto a posição estiver saudável. Sem juros.</p>
+    <div class="seg" role="group" aria-label="Cripto">${ativos.map((y) => `<button data-acao="cofre-ativo-${y.i}" aria-pressed="${y.i === sel}">${esc(y.simbolo)}</button>`).join("")}</div>
+    <div class="cartao ${perto ? "" : "ouro"}">
+      <div class="linha"><span>Preço de 1 ${esc(x.simbolo)}</span><b>${x.ok ? reais(x.preco) : "indisponível"}</b></div>
+      <div class="linha"><span>Sua garantia</span><b>${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)} ≈ ${reais(x.valorGarantia)}</b></div>
+      <div class="linha"><span>Sua dívida</span><b>${fmt(x.pos.divida)} xBRL</b></div>
+      <div class="linha"><span>Saúde (garantia ÷ dívida)</span><b>${esc(saude)}</b></div>
+      ${x.precoLiquidacao ? `<div class="linha"><span>Liquidação se ${esc(x.simbolo)} cair a</span><b>${reais(x.precoLiquidacao)}</b></div>` : ""}
+      <div class="linha"><span>Pode emitir agora</span><b>${fmt(x.podeEmitir)} xBRL</b></div>
+      <p class="mudo">Emissão até ${pct(x.a.crEmissaoBps)} de garantia · liquidação abaixo de ${pct(x.a.crLiquidacaoBps)} · taxa única de 0,5% somada à dívida · limite total deste cofre: ${fmt(x.a.tetoDivida, 18, 0)} xBRL</p>
+    </div>
+    ${perto ? `<div class="erro">⚠️ Sua posição está perto da liquidação. Pague parte da dívida ou deposite mais ${esc(x.simbolo)}.</div>` : ""}
+    ${x.ok && x.okEmissao ? "" : `<div class="aviso">${x.ok ? "A Chainlink está atrasada ou diverge da Uniswap. Por segurança, emitir e retirar garantia ficam parados até as fontes voltarem a concordar." : "O preço está indisponível. Por segurança, emitir, retirar e liquidar ficam parados."} Depositar e pagar dívida continuam sempre livres.</div>`}
+    <div class="seg" role="group" aria-label="Operação">${Object.entries(MODOS).map(([m, r]) => `<button data-acao="cofre-modo-${m}" aria-pressed="${m === modo}">${r}</button>`).join("")}</div>
+    <label for="cf-valor">${modo === "depositar" || modo === "retirar" ? `Quantidade de ${esc(x.simbolo)}` : "Quantidade de xBRL"}</label>
+    <input id="cf-valor" class="grande" inputmode="decimal" placeholder="0,00">
+    <p class="mudo">${{ depositar: `Na carteira: ${fmt(saldoTok, x.decimais, 4)} ${esc(x.simbolo)}`, emitir: `Máximo agora: ${fmt(x.podeEmitir)} xBRL (deixe uma folga: se a cripto cair, a saúde cai)`, quitar: `Dívida: ${fmt(x.pos.divida)} · você tem ${fmt(saldoX)} xBRL`, retirar: `Depositado: ${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)}` }[modo]}</p>
+    ${modo === "quitar" && x.pos.divida > 0n ? `<button class="btn sec" data-acao="cofre-tudo">Pagar a dívida toda</button>` : ""}
+    ${S.chainId !== 137 && modo === "depositar" ? `<button class="btn sec" data-acao="cofre-torneira">🚰 Pegar ${esc(x.simbolo)} de teste</button>` : ""}
+    ${botaoSegurar({ depositar: "depositar", emitir: "emitir xBRL", quitar: "pagar a dívida", retirar: "retirar" }[modo], "cofre")}
+    <details class="cartao"><summary><b>⚖️ Liquidar posições em risco</b></summary>
+      <p class="mudo">Qualquer pessoa pode pagar a dívida de uma posição abaixo de ${pct(x.a.crLiquidacaoBps)} e receber a garantia equivalente + 10% de bônus. Isso protege o xBRL de todo mundo.</p>
+      <button class="btn sec" data-acao="cofre-risco">🔎 Procurar posições em risco</button>
+      <div id="cf-risco"></div>
+    </details>`);
+};
+
+/** Lista contas com dívida no ativo atual e destaca as liquidáveis. */
+async function procurarRisco() {
+  const { x } = S.params.cofre;
+  const k = c("CofreCripto");
+  const out = $("#cf-risco");
+  out.innerHTML = `<div class="giro"></div>`;
+  const atual = await S.provider.getBlockNumber();
+  const contas = new Set();
+  let de = Number(S.imp.blocoInicial) || 0;
+  let passo = 50_000;
+  while (de <= atual) {
+    const ate = Math.min(atual, de + passo - 1);
+    try {
+      for (const ev of await k.queryFilter(k.filters.Emitido(x.i), de, ate)) contas.add(ev.args.conta);
+      de = ate + 1;
+    } catch (e) {
+      if (passo <= 500) throw e;
+      passo = Math.floor(passo / 4);
+    }
+  }
+  const linhas = [];
+  for (const conta of [...contas].slice(0, 200)) {
+    const [pos, [razao, ok]] = await Promise.all([k.posicao(x.i, conta), k.razaoGarantia(x.i, conta)]);
+    if (pos.divida === 0n || !ok) continue;
+    linhas.push({ conta, pos, razao, liquidavel: razao < BigInt(x.a.crLiquidacaoBps) });
+  }
+  linhas.sort((a, b) => (a.razao < b.razao ? -1 : 1));
+  S.params.risco = linhas;
+  out.innerHTML = linhas.length
+    ? linhas.slice(0, 20).map((l, j) => `<div class="linha"><span>${esc(curto(l.conta))} · ${pct(l.razao)}</span>${l.liquidavel ? `<button class="btn perigo" style="width:auto;margin:0" data-acao="cofre-simular-${j}">Liquidar</button>` : `<span class="selo verde">saudável</span>`}</div>`).join("")
+    : `<p class="mudo">Nenhuma posição com dívida.</p>`;
+}
+
 // ---------- Trabalhos ----------
 /** Mostra os números que sustentam o nível (contas falsas não conseguem forjar tempo nem pessoas distintas). */
 function resumoReputacao(rep) {
@@ -709,11 +836,11 @@ TELAS.TRABALHOS = async () => {
     const t = $("#sinc-txt");
     if (t) t.textContent = `Lendo a blockchain… bloco ${bloco.toLocaleString("pt-BR")} de ${atual.toLocaleString("pt-BR")}`;
   });
-  const [{ meus, vagas }, rep] = await Promise.all([S.escrow.listar(S.endereco), S.escrow.reputacao(S.endereco)]);
-  const lista = aba === "meus" ? meus : vagas;
+  const [{ meus, vagas, arbitragens }, rep] = await Promise.all([S.escrow.listar(S.endereco), S.escrow.reputacao(S.endereco)]);
+  const lista = { meus, vagas, arbitragens }[aba] || meus;
   const card = (t) => {
     const m = ESCROW.modalidades[t.modalidade];
-    const papel = t.cliente.toLowerCase() === S.endereco.toLowerCase() ? "Você contratou" : t.trabalhador.toLowerCase() === S.endereco.toLowerCase() ? "Você trabalha" : "Vaga aberta";
+    const papel = t.cliente.toLowerCase() === S.endereco.toLowerCase() ? "Você contratou" : t.trabalhador.toLowerCase() === S.endereco.toLowerCase() ? "Você trabalha" : aba === "arbitragens" ? "Você é árbitro" : "Vaga aberta";
     return `<button class="item" data-trabalho="${esc(t.id)}"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">#${esc(t.id)} · ${esc(m.nome)} · ${esc(papel)}</span></span><b>${fmt(t.valor)}</b></button>`;
   };
   tela(`
@@ -721,7 +848,7 @@ TELAS.TRABALHOS = async () => {
     <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
       ${resumoReputacao(rep)}</div>
     <button class="btn prim" data-ir="TRABALHO_NOVO">+ Contratar alguém</button>
-    <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas abertas (${vagas.length})</button></div>
+    <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas (${vagas.length})</button>${arbitragens.length ? `<button data-acao="aba-arbitragens" aria-pressed="${aba === "arbitragens"}">⚖️ Árbitro (${arbitragens.length})</button>` : ""}</div>
     ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
 };
 
@@ -737,7 +864,15 @@ TELAS.TRABALHO_NOVO = () => {
     ${m === 3 ? `<label for="tn-etapas">Número de etapas (2 a 50)</label><input id="tn-etapas" inputmode="numeric" value="3">` : ""}
     <label for="tn-trab">Trabalhador (opcional: vazio = vaga aberta)</label><input id="tn-trab" autocomplete="off" autocapitalize="none" placeholder="0x…">
     ${m === 0 ? `<div class="ok">Vamos gerar um <b>código de chegada</b> (palavras + QR). Deixe no local ou mostre na porta: o trabalhador só comprova que chegou com ele.</div>` : ""}
-    ${m === 1 ? `<div class="ok">Vamos gerar um <b>código de entrega</b> (palavras + QR). Passe só para quem vai receber: ao conferir, o pagamento sai na hora.</div>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar o pagamento</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
+    ${m === 1 ? `<div class="ok">Vamos gerar um <b>código de entrega</b> (palavras + QR). Passe só para quem vai receber: o entregador só entrega a mercadoria quando recebe o código, e o pagamento sai na hora. Sem código, sem entrega: não existe "entreguei e não me deram o código".</div>
+      <label class="linha" style="color:var(--txt)"><span>Exigir caução do entregador (recomendado para mercadoria de valor)</span><input type="checkbox" id="tn-caucao-on" style="width:auto" checked></label>
+      <label for="tn-caucao">Caução (mín. ${ESCROW.caucaoMinima} xBRL, de preferência o valor da mercadoria)</label><input id="tn-caucao" inputmode="decimal" value="${ESCROW.caucaoMinima}">
+      <p class="mudo">A caução fica travada até o fim. Com o código de entrega, volta para o entregador. Se ele trouxer a mercadoria de volta, você dá o <b>código de devolução</b> e ele recupera a caução. Se ele sumir com a mercadoria, a caução fica com você.</p>` : m !== 3 ? `<label class="linha" style="color:var(--txt)"><span>Exigir código para liberar o pagamento</span><input type="checkbox" id="tn-cod" style="width:auto"></label>` : ""}
+    ${m !== 1 ? `<details class="cartao"><summary><b>⚖️ Árbitros em caso de disputa (opcional)</b></summary>
+      <p class="mudo">Você indica uma pessoa de confiança; o trabalhador indica outra ao aceitar. Se houver disputa, os dois árbitros propõem uma divisão: se concordarem, ela é executada na hora. Sem acordo em 30 dias, vale a média das propostas.</p>
+      <label for="tn-arb">Seu árbitro (endereço 0x…)</label><input id="tn-arb" autocomplete="off" autocapitalize="none" placeholder="0x… (vazio = sem árbitros)">
+      <label class="linha" style="color:var(--txt)"><span>Aceito o criador da rede como desempate (só entre as propostas dos árbitros, depois de 3 dias)</span><input type="checkbox" id="tn-desempate" style="width:auto"></label>
+    </details>` : ""}
     ${botaoSegurar("travar o pagamento", "criar-trabalho")}
     <p class="mudo">O valor fica travado no contrato, não com a gente. Taxa de 0,1% só quando o trabalhador recebe.</p>`);
 };
@@ -752,12 +887,24 @@ TELAS.TRABALHO = async () => {
   const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
   const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
   const chegada = souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
-  S.params.t = t;
+  const devolucao = souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
+  const z = E.ZeroAddress;
+  const temArbitros = t.arbitroCliente !== z;
+  const souParte = souCliente || t.trabalhador.toLowerCase() === S.endereco.toLowerCase();
+  const souArbitro = temArbitros && [t.arbitroCliente, t.arbitroTrabalhador].some((a) => a.toLowerCase() === S.endereco.toLowerCase());
+  const propArb = (v) => (v ? `${(v - 1) / 100}%` : "—");
+  // Intervalo do desempate do criador (entre as propostas dos árbitros)
+  const lim = temArbitros && t.propostaArbCliente && t.propostaArbTrabalhador
+    ? [Math.min(t.propostaArbCliente, t.propostaArbTrabalhador) - 1, Math.max(t.propostaArbCliente, t.propostaArbTrabalhador) - 1]
+    : [0, 10_000];
+  S.params.t = { ...t, descricao: resumo?.descricao, txCriacao: resumo?.txCriacao, txAceite: resumo?.txAceite };
   const ROTULOS = {
     aceitar: "aceitar o trabalho", cancelar: "cancelar e reaver o valor", marcarEntregue: "marcar como entregue",
     liberar: t.modalidade === 3 && t.etapasPagas + 1 < t.etapas ? `liberar a etapa ${t.etapasPagas + 1}` : "aprovar e pagar", reivindicar: "receber (prazo de revisão vencido)",
     desistir: "desistir (devolve ao cliente)", aprovarCandidato: "aprovar este trabalhador", recusarCandidato: "recusar o candidato",
-    retirarCandidatura: "retirar minha candidatura", abrirDisputa: "abrir disputa", reembolsarPorPrazo: "reaver (prazo vencido)", resolverPorTempo: "executar divisão 50/50",
+    retirarCandidatura: "retirar minha candidatura", abrirDisputa: "abrir disputa", reembolsarPorPrazo: t.caucaoTravada ? "reaver pagamento + caução (entregador não apareceu)" : "reaver (prazo vencido)",
+    resolverPorTempo: t.propostaArbCliente && t.propostaArbTrabalhador ? "executar a média dos árbitros" : "executar divisão 50/50",
+    chegadaPeloCliente: "confirmar que o trabalhador chegou",
   };
   tela(`
     <h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
@@ -773,17 +920,63 @@ TELAS.TRABALHO = async () => {
       ${t.modalidade === 0 ? `<div class="linha"><span>Chegada</span>${t.chegou ? '<span class="selo verde">confirmada com código</span>' : "<b>aguardando</b>"}</div>` : ""}
       ${t.estado === 2 ? `<div class="linha"><span>Pagamento automático em</span><b>${new Date((t.entregueEm + ESCROW.prazoRevisaoDias * 86400) * 1000).toLocaleString("pt-BR")}</b></div>` : ""}
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
+      ${t.caucao > 0n ? `<div class="linha"><span>Caução do entregador</span><b>${fmt(t.caucao)} xBRL ${t.caucaoTravada ? "· travada" : ""}</b></div>` : ""}
+      ${temArbitros ? `<div class="linha"><span>Árbitro do cliente</span><span>${esc(curto(t.arbitroCliente))}</span></div>
+        <div class="linha"><span>Árbitro do trabalhador</span><span>${t.arbitroTrabalhador !== z ? esc(curto(t.arbitroTrabalhador)) : "indicado ao aceitar"}</span></div>
+        ${t.estado === 3 ? `<div class="linha"><span>Propostas dos árbitros</span><b>${propArb(t.propostaArbCliente)} · ${propArb(t.propostaArbTrabalhador)}</b></div>` : ""}` : ""}
+      ${t.desempateCriador ? `<div class="linha"><span>Desempate</span><b>criador da rede (opcional)</b></div>` : ""}
     </div>
+    ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? "o trabalhador" : souArbitro ? "as partes" : "o cliente"}</button>` : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
     ${codigo ? `<h2>🔑 Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</h2><p class="mudo">Entregue só a quem recebe, na hora da entrega.</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
+    ${devolucao ? `<details class="cartao"><summary><b>↩️ Código de devolução</b> (só se a mercadoria voltar para você)</summary><p class="mudo">Entregue ao entregador <b>somente</b> quando ele devolver a mercadoria em suas mãos. Com ele, você recebe o pagamento de volta e ele recupera a caução.</p>${qrSvg(devolucao)}<div class="codigo">${esc(devolucao)}</div></details>` : ""}
+    ${acoes.includes("aceitar") && temArbitros ? `<label for="tr-arb">Seu árbitro para disputas (endereço 0x… de alguém de sua confiança)</label><input id="tr-arb" autocomplete="off" autocapitalize="none" placeholder="0x…">` : ""}
+    ${acoes.includes("aceitar") && t.caucao > 0n ? `<div class="aviso">Ao aceitar, ${fmt(t.caucao)} xBRL da sua carteira ficam travados como caução. Eles voltam quando você usar o código de entrega (ou o de devolução, se trouxer a mercadoria de volta). <b>Nunca entregue nem devolva a mercadoria sem receber o código.</b></div>` : ""}
     ${acoes.includes("confirmarChegada") ? `<label for="tr-chegada">Cheguei: código de chegada que está no local</label><input id="tr-chegada" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-chegada">📷 Escanear QR</button>${botaoSegurar("confirmar que cheguei", "tr-chegada")}` : ""}
     ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-codigo">📷 Escanear QR</button>${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
+    ${acoes.includes("confirmarDevolucao") && !souCliente ? `<details class="cartao"><summary><b>↩️ Devolver a mercadoria</b></summary><p class="mudo">Só devolva na mão do cliente e em troca do código de devolução. Com o código, você recupera a caução.</p><label for="tr-dev">Código de devolução</label><input id="tr-dev" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-devolucao">📷 Escanear QR</button>${botaoSegurar("confirmar a devolução", "tr-devolucao")}</details>` : ""}
+    ${acoes.includes("arbitrar") ? `<h2>⚖️ Sua proposta como árbitro</h2><label for="tr-arbitrar">Quanto do restante vai ao trabalhador? <b id="tr-arbitrar-v">50%</b></label><input type="range" id="tr-arbitrar" min="0" max="100" value="50">${botaoSegurar("enviar proposta de árbitro", "tr-arbitrar")}<p class="mudo">Se o outro árbitro propuser o mesmo número, a divisão acontece na hora.</p>` : ""}
+    ${acoes.includes("desempatar") ? `<h2>⚖️ Desempate do criador</h2><label for="tr-desempate">Ao trabalhador: <b id="tr-desempate-v">${Math.round((lim[0] + lim[1]) / 200)}%</b> (entre ${lim[0] / 100}% e ${lim[1] / 100}%)</label><input type="range" id="tr-desempate" min="${Math.ceil(lim[0] / 100)}" max="${Math.floor(lim[1] / 100)}" value="${Math.round((lim[0] + lim[1]) / 200)}">${botaoSegurar("desempatar", "tr-desempatar")}` : ""}
     ${acoes.includes("proporAcordo") ? `<label for="tr-acordo">Proposta: quanto do restante vai ao trabalhador? <b id="tr-acordo-v">50%</b></label><input type="range" id="tr-acordo" min="0" max="100" value="50">${botaoSegurar("propor acordo", "tr-acordo")}` : ""}
     ${acoes.includes("avaliar") ? `<h2>Avalie a outra parte</h2><div class="estrelas" role="group" aria-label="Estrelas">${[1, 2, 3, 4, 5].map((n) => `<button data-estrela="${n}" aria-label="${n} estrelas">★</button>`).join("")}</div>${botaoSegurar("enviar avaliação", "tr-avaliar")}` : ""}
     ${acoes.filter((a) => ROTULOS[a]).map((a) => (["abrirDisputa", "desistir", "cancelar", "recusarCandidato"].includes(a) ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
     ${acoes.length === 0 ? `<p class="mudo">Nenhuma ação disponível para você agora.</p>` : ""}
     <button class="btn sec" data-ir="TRABALHOS">Voltar</button>`);
-  $("#tr-acordo")?.addEventListener("input", (ev) => ($("#tr-acordo-v").textContent = `${ev.target.value}%`));
+  for (const n of ["acordo", "arbitrar", "desempate"]) $(`#tr-${n}`)?.addEventListener("input", (ev) => ($(`#tr-${n}-v`).textContent = `${ev.target.value}%`));
+};
+
+// ---------- Conversa ----------
+function participantes(t) {
+  const z = E.ZeroAddress;
+  return [t.cliente, t.trabalhador, t.arbitroCliente, t.arbitroTrabalhador].filter((a) => a && a !== z);
+}
+function papelDe(t, a) {
+  const x = a.toLowerCase();
+  if (x === S.endereco.toLowerCase()) return "Você";
+  if (x === t.cliente.toLowerCase()) return "Cliente";
+  if (x === t.trabalhador.toLowerCase()) return "Trabalhador";
+  if (x === CREATOR_TREASURY.toLowerCase()) return "Criador da rede";
+  return "Árbitro";
+}
+
+TELAS.CHAT = async () => {
+  const t = S.params.t;
+  tela(`<h1>💬 Conversa</h1><div class="cartao"><div class="giro"></div><p class="mudo">Abrindo mensagens cifradas…</p></div>`);
+  const conversa = idConversa(S.imp.EscrowTrabalho, t.id);
+  const msgs = await S.chat.ler(conversa, S.carteira);
+  const quem = participantes(t);
+  tela(`
+    <h1>💬 Conversa do trabalho #${esc(t.id)}</h1>
+    <p class="mudo">Cifrada de ponta a ponta: só ${quem.length > 2 ? "as partes e os árbitros" : "vocês dois"} conseguem ler. Cada mensagem é uma pequena transação (custa um pouco de POL) e fica guardada para sempre, servindo de registro numa disputa.</p>
+    <div class="cartao" id="chat-lista" style="max-height:55vh;overflow:auto">
+      ${msgs.map((m) => `<div class="msg ${m.de.toLowerCase() === S.endereco.toLowerCase() ? "minha" : ""}"><small class="mudo">${esc(papelDe(t, m.de))}${m.em ? " · " + new Date(m.em * 1000).toLocaleString("pt-BR") : ""}</small><p>${esc(m.texto)}</p></div>`).join("") || `<p class="mudo">Nenhuma mensagem ainda. Diga olá! 👋</p>`}
+    </div>
+    <label for="chat-txt">Mensagem</label><textarea id="chat-txt" maxlength="${MAX_CARACTERES}" placeholder="Ex.: Estou chegando em 10 minutos"></textarea>
+    <button class="btn prim" data-acao="chat-enviar">Enviar mensagem</button>
+    <button class="btn sec" data-acao="chat-atualizar">↻ Atualizar</button>
+    <button class="btn sec" data-acao="chat-voltar">Voltar ao trabalho</button>`);
+  const l = $("#chat-lista");
+  l.scrollTop = l.scrollHeight;
 };
 
 TELAS.AJUSTES = async () => {
@@ -806,7 +999,7 @@ TELAS.AJUSTES = async () => {
       <h2 style="margin-top:0">Sobre</h2>
       <div class="linha"><span>Versão</span><b>${esc(VERSAO)}</b></div>
       <div class="linha"><span>Sua carteira</span><a href="${esc(linkExplorer(S.chainId, "address", S.endereco))}" target="_blank" rel="noopener">${esc(curto(S.endereco))}</a></div>
-      ${S.imp ? ["xBRL", "ReservaBRL", "EscrowTrabalho"].map((n) => `<div class="linha"><span>${n}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
+      ${S.imp ? ["xBRL", "ReservaBRL", "CofreCripto", "EscrowTrabalho", "Mensageiro"].map((n) => `<div class="linha"><span>${n}</span><a href="${esc(linkExplorer(S.chainId, "address", S.imp[n]))}" target="_blank" rel="noopener">${esc(curto(S.imp[n]))}</a></div>`).join("") : ""}
       <div class="linha"><span>Taxa vitalícia 0,1% para</span><span>${esc(curto(CREATOR_TREASURY))}</span></div>
     </div>
     <h2>Zona de perigo</h2>
@@ -940,7 +1133,38 @@ async function acao(nome, el) {
     }
     case "aba-meus":
     case "aba-vagas":
+    case "aba-arbitragens":
       return ir("TRABALHOS", { aba: nome.slice(4) });
+    case "scan-devolucao":
+      return escanearQR("#tr-dev");
+    case "abrir-chat":
+      return ir("CHAT", { t: S.params.t });
+    case "chat-atualizar":
+      return render();
+    case "chat-voltar":
+      return ir("TRABALHO", { id: S.params.t.id });
+    case "chat-enviar": {
+      const t = S.params.t;
+      const txs = {};
+      if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
+      if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
+      const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), $("#chat-txt").value, txs);
+      await executar("Enviar mensagem", [{ rotulo: "Enviar cifrada", fn: (o) => c("Mensageiro", true).enviar(prep.conversa, prep.para, prep.cifrados, prep.registrar, o) }]);
+      fecharModal();
+      if (prep.semChave.length) toast(`${prep.semChave.length} participante(s) ainda sem chave: vão ler quando ativarem.`);
+      return render();
+    }
+    case "cofre-tudo":
+      $("#cf-valor").value = E.formatUnits(S.params.cofre.x.pos.divida, 18).replace(".", ",");
+      S.params.quitarTudo = true;
+      return;
+    case "cofre-torneira": {
+      const { x } = S.params.cofre;
+      await executar(`Torneira ${x.simbolo}`, [{ rotulo: "Pegar moedas de teste", fn: (o) => erc20(x.a.token, true).torneira(o) }]);
+      return;
+    }
+    case "cofre-risco":
+      return procurarRisco();
     case "scan-chegada":
       return escanearQR("#tr-chegada");
     case "scan-codigo":
@@ -995,6 +1219,20 @@ async function acao(nome, el) {
     }
     default:
       if (nome?.startsWith("mod-")) return ir("TRABALHO_NOVO", { modalidade: Number(nome.slice(4)) });
+      if (nome?.startsWith("cofre-ativo-")) return ir("COFRE", { ativo: Number(nome.slice(12)), modo: S.params.modo });
+      if (nome?.startsWith("cofre-modo-")) return ir("COFRE", { ativo: S.params.cofre?.x.i ?? 0, modo: nome.slice(11) });
+      if (nome?.startsWith("cofre-simular-")) {
+        const l = S.params.risco[Number(nome.slice(14))];
+        const { x } = S.params.cofre;
+        const plano = await c("CofreCripto").simularLiquidacao(x.i, l.conta);
+        S.params.liquidar = { conta: l.conta, plano };
+        modal(`<h2>⚖️ Liquidar ${esc(curto(l.conta))}</h2>
+          <div class="linha"><span>Você paga</span><b>${fmt(plano.pagar)} xBRL</b></div>
+          <div class="linha"><span>Você recebe</span><b>${fmt(plano.entregar, x.decimais, 6)} ${esc(x.simbolo)}</b></div>
+          ${plano.coberto > 0n ? `<div class="linha"><span>Coberto pelo colchão</span><b>${fmt(plano.coberto)}</b></div>` : ""}
+          <p class="mudo">O que sobrar da garantia continua com o dono da posição.</p>
+          ${botaoSegurar("liquidar", "cofre-liquidar")}<button class="btn sec" data-acao="fechar-modal">Cancelar</button>`);
+      }
   }
 }
 
@@ -1058,9 +1296,40 @@ async function confirmar(nome) {
     }
     case "criar-trabalho":
       return criarTrabalho();
+    case "cofre":
+      return operarCofre();
+    case "cofre-liquidar": {
+      const { x } = S.params.cofre;
+      const { conta, plano } = S.params.liquidar;
+      const k = c("CofreCripto", true);
+      await executar("Liquidar posição", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, plano.pagar, "Autorizar xBRL"), { rotulo: "Liquidar", fn: (o) => k.liquidar(x.i, conta, o) }]);
+      return;
+    }
     default:
       if (nome?.startsWith("tr-")) return acaoTrabalho(nome.slice(3));
   }
+}
+
+async function operarCofre() {
+  const { x, saldoX } = S.params.cofre;
+  const modo = S.params.modo || "depositar";
+  const k = c("CofreCripto", true);
+  const ehCripto = modo === "depositar" || modo === "retirar";
+  let v = lerValor($("#cf-valor").value, ehCripto ? x.decimais : 18);
+  if (v === 0n) throw new Error("Informe um valor");
+  if (modo === "depositar") {
+    return executar(`Depositar ${x.simbolo}`, [passoAprovar(x.a.token, S.imp.CofreCripto, v, `Autorizar ${x.simbolo}`), { rotulo: "Depositar garantia", fn: (o) => k.depositar(x.i, v, o) }]);
+  }
+  if (modo === "retirar") return executar(`Retirar ${x.simbolo}`, [{ rotulo: "Retirar garantia", fn: (o) => k.retirar(x.i, v, o) }]);
+  if (modo === "emitir") {
+    if (v > x.podeEmitir) throw new Error(`O máximo agora é ${fmt(x.podeEmitir)} xBRL`);
+    return executar("Emitir xBRL", [{ rotulo: "Emitir", fn: (o) => k.emitir(x.i, v, o) }]);
+  }
+  // quitar: nunca aprova mais do que a dívida
+  if (S.params.quitarTudo || v > x.pos.divida) v = x.pos.divida;
+  S.params.quitarTudo = false;
+  if (v > saldoX) throw new Error("Saldo de xBRL insuficiente");
+  return executar("Pagar dívida", [passoAprovar(S.imp.xBRL, S.imp.CofreCripto, v, "Autorizar xBRL"), { rotulo: "Pagar", fn: (o) => k.quitar(x.i, S.endereco, v, o) }]);
 }
 
 async function criarTrabalho() {
@@ -1078,6 +1347,15 @@ async function criarTrabalho() {
   const chegada = m === 0 ? gerarCodigoEntrega(palavras) : null;
   const chegadaHash = chegada ? hashChegada(S.imp.EscrowTrabalho, S.endereco, chegada) : E.ZeroHash;
   if (chegada) guardarCodigo(chegadaHash, chegada);
+  const arbTxt = $("#tn-arb")?.value.trim() || "";
+  if (arbTxt && !E.isAddress(arbTxt)) throw new Error("Endereço do árbitro inválido");
+  if (arbTxt && [S.endereco, trabTxt].some((a) => a && a.toLowerCase() === arbTxt.toLowerCase())) throw new Error("O árbitro precisa ser outra pessoa");
+  const comCaucao = m === 1 && $("#tn-caucao-on")?.checked;
+  const caucao = comCaucao ? lerValor($("#tn-caucao").value, 18) : 0n;
+  if (comCaucao && caucao < E.parseEther(String(ESCROW.caucaoMinima))) throw new Error(`A caução mínima é ${ESCROW.caucaoMinima} xBRL`);
+  const devolucao = comCaucao ? gerarCodigoEntrega(palavras) : null;
+  const devolucaoHash = devolucao ? hashDevolucao(S.imp.EscrowTrabalho, S.endereco, devolucao) : E.ZeroHash;
+  if (devolucao) guardarCodigo(devolucaoHash, devolucao);
   const p = {
     modalidade: m,
     trabalhador: trabTxt ? E.getAddress(trabTxt) : E.ZeroAddress,
@@ -1086,13 +1364,18 @@ async function criarTrabalho() {
     etapas: m === 3 ? Math.max(2, Math.min(50, Number($("#tn-etapas").value) || 2)) : 1,
     codigoHash,
     chegadaHash,
+    arbitroCliente: arbTxt ? E.getAddress(arbTxt) : E.ZeroAddress,
+    desempateCriador: m !== 1 && !!$("#tn-desempate")?.checked,
+    caucao,
+    devolucaoHash,
     descricao: $("#tn-desc").value.trim().slice(0, 140),
   };
   await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar xBRL"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
   if (codigo || chegada) {
     modal(`<h2>✅ Pagamento travado</h2>
       ${chegada ? `<p><b>📍 Código de chegada</b> — deixe no local ou mostre na porta:</p>${qrSvg(chegada)}<div class="codigo" id="cod-chegada">${esc(chegada)}</div>` : ""}
-      ${codigo ? `<p><b>🔑 Código de ${m === 1 ? "entrega" : "liberação"}</b> — entregue <b>só</b> a quem recebe:</p>${qrSvg(codigo)}<div class="codigo" id="cod-liberacao">${esc(codigo)}</div>` : ""}
+      ${codigo ? `<p><b>🔑 Código de ${m === 1 ? "entrega" : "liberação"}</b> — entregue <b>só</b> a quem recebe, no momento em que receber:</p>${qrSvg(codigo)}<div class="codigo" id="cod-liberacao">${esc(codigo)}</div>` : ""}
+      ${devolucao ? `<p><b>↩️ Código de devolução</b> — só se a mercadoria voltar para as suas mãos:</p><div class="codigo" id="cod-devolucao">${esc(devolucao)}</div>` : ""}
       <p class="mudo">Os códigos também ficam salvos neste aparelho, na tela do trabalho.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   }
   ir("TRABALHOS", { aba: "meus" });
@@ -1103,7 +1386,34 @@ async function acaoTrabalho(nome) {
   const k = c("EscrowTrabalho", true);
   const id = BigInt(t.id);
   const f = {
-    aceitar: () => executar("Aceitar trabalho", [{ rotulo: "Aceitar", fn: (o) => k.aceitar(id, o) }]),
+    aceitar: () => {
+      let arb = E.ZeroAddress;
+      if (t.arbitroCliente !== E.ZeroAddress) {
+        const txt = $("#tr-arb")?.value.trim() || "";
+        if (!E.isAddress(txt)) throw new Error("Indique o seu árbitro (endereço 0x…)");
+        if ([t.cliente, S.endereco].some((a) => a.toLowerCase() === txt.toLowerCase())) throw new Error("O árbitro precisa ser outra pessoa");
+        arb = E.getAddress(txt);
+      }
+      const passos = [];
+      if (t.caucao > 0n) passos.push(passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, t.caucao, "Autorizar caução"));
+      passos.push({ rotulo: "Aceitar", fn: (o) => k.aceitar(id, arb, o) });
+      return executar("Aceitar trabalho", passos);
+    },
+    chegadaPeloCliente: () => executar("Confirmar chegada", [{ rotulo: "Confirmar", fn: (o) => k.confirmarChegadaPeloCliente(id, o) }]),
+    devolucao: () => {
+      const cod = normalizarCodigo($("#tr-dev").value);
+      if (!codigoTemFormatoValido(cod)) throw new Error("O código de devolução tem 5 ou 6 palavras.");
+      if (hashDevolucao(S.imp.EscrowTrabalho, t.cliente, cod) !== t.devolucaoHash) throw new Error("Código de devolução incorreto");
+      return executar("Confirmar devolução", [{ rotulo: "Devolução com código", fn: (o) => k.confirmarDevolucao(id, cod, o) }]);
+    },
+    arbitrar: () => {
+      const bps = Number($("#tr-arbitrar").value) * 100;
+      return executar("Proposta do árbitro", [{ rotulo: `${bps / 100}% ao trabalhador`, fn: (o) => k.arbitrar(id, bps, o) }]);
+    },
+    desempatar: () => {
+      const bps = Number($("#tr-desempate").value) * 100;
+      return executar("Desempatar", [{ rotulo: `${bps / 100}% ao trabalhador`, fn: (o) => k.desempatar(id, bps, o) }]);
+    },
     cancelar: () => executar("Cancelar", [{ rotulo: "Cancelar", fn: (o) => k.cancelar(id, o) }]),
     desistir: () => executar("Desistir", [{ rotulo: "Desistir", fn: (o) => k.desistir(id, o) }]),
     retirarCandidatura: () => executar("Retirar candidatura", [{ rotulo: "Retirar", fn: (o) => k.desistir(id, o) }]),

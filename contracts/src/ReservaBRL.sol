@@ -14,7 +14,10 @@ interface IxBRLEmissao is IERC20 {
 }
 
 /// @title ReservaBRL — lastro 100%+ em stablecoins de Real, lista de lastros FIXA, proteções automáticas
-/// @notice Emite e resgata xBRL contra stablecoins BRL (BRZ, BRLA). 1 xBRL = 1 real de lastro, sempre.
+/// @notice Emite e resgata xBRL contra stablecoins BRL (BRZ, BRLA, BRL1, WBRL). 1 xBRL = 1 real de lastro.
+///
+/// Taxa de 0,1% na emissão e no resgate: metade para o CREATOR_TREASURY, metade para o COLCHÃO (CofreCripto),
+/// que guarda xBRL para cobrir eventuais prejuízos de liquidação do cofre de cripto.
 ///
 /// Proteções (todas automáticas, sem decisão humana):
 ///   1. Lista de lastros gravada no deploy e IMUTÁVEL. Ninguém (nem o dono) consegue adicionar um token,
@@ -27,7 +30,8 @@ interface IxBRLEmissao is IERC20 {
 ///      lastro perder a paridade, robôs não conseguem trocá-lo pelo lastro bom de uma vez só.
 ///   4. Fase 2 (supply >= 1.000.000): resgate de até 20% do supply por 24 h (anti-corrida bancária).
 ///
-/// Invariante central (testado por fuzzing): lastroTotal() >= totalSupply() de xBRL.
+/// Invariante central (testado por fuzzing): lastroTotal() >= totalSupply() - dívida do CofreCripto.
+/// Versão beta: `TETO_RESERVA` limita o tamanho total da reserva (0 = sem limite).
 /// O dono NÃO saca lastro, NÃO pausa resgates, NÃO muda taxas, NÃO adiciona lastro. Ele só pode pausar
 /// a EMISSÃO com um lastro específico (ex.: emissor do lastro em crise). Resgate nunca é pausável.
 contract ReservaBRL is Ownable2Step, ReentrancyGuard {
@@ -44,6 +48,8 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
 
     IxBRLEmissao public immutable XBRL;
     address public immutable CREATOR_TREASURY;
+    address public immutable COLCHAO;
+    uint256 public immutable TETO_RESERVA;
 
     uint256 public constant BPS = 10_000;
     uint256 public constant TAXA_BPS = 10; // 0,1% na emissão e no resgate
@@ -94,9 +100,21 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
     error LimiteJanelaResgate(uint256 disponivel);
     error LastroInsuficiente(uint256 disponivel, uint256 necessario);
     error SaidaMinimaNaoAtingida(uint256 obtido, uint256 minimo);
+    error TetoDaReservaAtingido(uint256 teto);
 
-    constructor(address xbrl, address treasury, address[] memory lastrosFixos, address dono) Ownable(dono) {
-        if (xbrl == address(0) || treasury == address(0)) revert EnderecoZero();
+    constructor(
+        address xbrl,
+        address treasury,
+        address colchao,
+        address[] memory lastrosFixos,
+        address dono,
+        uint256 tetoReserva
+    ) Ownable(dono) {
+        if (xbrl == address(0) || treasury == address(0) || colchao == address(0)) {
+            revert EnderecoZero();
+        }
+        COLCHAO = colchao;
+        TETO_RESERVA = tetoReserva;
         if (lastrosFixos.length == 0 || lastrosFixos.length > MAX_LASTROS) {
             revert QuantidadeDeLastrosInvalida();
         }
@@ -225,6 +243,7 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
         uint256 recebido = IERC20(token).balanceOf(address(this)) - antes;
         uint256 bruto = _normalizar(recebido, l.decimais);
         if (bruto == 0) revert ValorZero();
+        if (TETO_RESERVA != 0 && lastroTotal() > TETO_RESERVA) revert TetoDaReservaAtingido(TETO_RESERVA);
         _consumirEmissao(l, bruto);
 
         uint256 taxa;
@@ -235,8 +254,12 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
         // Protegido por nonReentrant; o lastro já entrou e foi medido pelo saldo.
         // forge-lint: disable-next-line(reentrancy-no-eth)
         XBRL.mint(msg.sender, liquido);
-        // forge-lint: disable-next-line(reentrancy-no-eth)
-        if (taxa != 0) XBRL.mint(CREATOR_TREASURY, taxa);
+        if (taxa != 0) {
+            // forge-lint: disable-next-line(reentrancy-no-eth)
+            XBRL.mint(CREATOR_TREASURY, taxa - taxa / 2);
+            // forge-lint: disable-next-line(reentrancy-no-eth)
+            XBRL.mint(COLCHAO, taxa / 2);
+        }
         // forge-lint: disable-next-line(reentrancy-events)
         emit Emitido(msg.sender, token, recebido, liquido, taxa, spread);
     }
@@ -263,7 +286,10 @@ contract ReservaBRL is Ownable2Step, ReentrancyGuard {
         if (pago > disponivel) revert LastroInsuficiente(disponivel, pago);
 
         IERC20(address(XBRL)).safeTransferFrom(msg.sender, address(this), valorXbrl);
-        if (taxa != 0) IERC20(address(XBRL)).safeTransfer(CREATOR_TREASURY, taxa);
+        if (taxa != 0) {
+            IERC20(address(XBRL)).safeTransfer(CREATOR_TREASURY, taxa - taxa / 2);
+            IERC20(address(XBRL)).safeTransfer(COLCHAO, taxa / 2);
+        }
         // Protegido por nonReentrant; a janela de resgate já foi atualizada antes das chamadas.
         // forge-lint: disable-next-line(reentrancy-no-eth)
         XBRL.burn(bruto);

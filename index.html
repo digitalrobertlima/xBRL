@@ -89,7 +89,7 @@
 <header>
   <div class="wrap">
     <a class="marca" href="#"><img src="wallet/icons/icon-192.png" alt=""><span>x<b>BRL</b></span></a>
-    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#uniswap">Uniswap</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
+    <nav aria-label="Seções"><a href="#como">Como funciona</a><a href="#reserva">Reserva</a><a href="#cofre">Cofre cripto</a><a href="#uniswap">Uniswap</a><a href="#trabalho">Trabalho</a><a href="#seguranca">Segurança</a><a href="#contratos">Contratos</a></nav>
     <a class="cta ouro" href="wallet/">Abrir carteira</a>
   </div>
 </header>
@@ -97,9 +97,9 @@
 <main class="wrap">
   <div class="hero">
     <div>
-      <span class="selo">Polygon PoS · código aberto</span>
+      <span class="selo">Polygon PoS · código aberto · beta</span>
       <h1>O Real <em>soberano</em> e inconfiscável.</h1>
-      <p class="lead">1 xBRL = R$ 1, lastreado 1:1 em stablecoins de Real e verificável a qualquer momento na blockchain. Sem banco no meio, sem congelamento, sem confisco: a chave fica no seu celular.</p>
+      <p class="lead">1 xBRL = R$ 1, lastreado em stablecoins de Real ou em cripto supercolateralizada, verificável a qualquer momento na blockchain. Sem banco no meio, sem congelamento, sem confisco: a chave fica no seu celular.</p>
       <div class="acoes">
         <a class="cta ouro" href="wallet/">Criar minha carteira grátis</a>
         <a class="cta linha" href="#como">Entender em 2 minutos</a>
@@ -109,18 +109,21 @@
   </div>
 
   <div class="faixa">
-    <div><b>≥100%</b>de lastro em stablecoins de Real, auditável on-chain</div>
+    <div><b>≥100%</b>de lastro: stablecoins de Real ou 200%+ em ETH/POL, auditável on-chain</div>
     <div><b>0</b>botões de congelar, pausar ou confiscar saldo</div>
     <div><b>R$ 0</b>de taxa para transferir: xBRL é um token padrão, negociável na Uniswap</div>
     <div><b>0</b>servidores: carteira roda inteira no seu aparelho</div>
   </div>
+
+  <p class="aviso"><b>🧪 Fase beta na rede real.</b> Os contratos estão na Polygon com limites baixos de propósito (reserva até R$ 1.000 e cofre cripto até R$ 500 por moeda) para testes com dinheiro de verdade, mas em valores pequenos. Ainda não há auditoria externa.</p>
 
   <section id="como">
     <h2>Como funciona</h2>
     <p class="sub">Três contratos públicos na Polygon. Nenhum deles tem dono com poder sobre o seu saldo.</p>
     <div class="grade">
       <div class="card"><div class="ic">🪙</div><h3>xBRL</h3><p>O token. Sem lista negra, sem pausa, sem upgrade, sem taxa na transferência. Só a Reserva emite — e só quando recebe o lastro antes.</p></div>
-      <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega BRZ ou BRLA e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
+      <div class="card"><div class="ic">🏛️</div><h3>Reserva BRL</h3><p>Você entrega stablecoin de Real (BRZ, BRLA, BRL1, wBRL) e recebe xBRL. Devolve xBRL e recebe de volta. Resgate nunca pode ser pausado.</p></div>
+      <div class="card"><div class="ic">🏦</div><h3>Cofre cripto</h3><p>Deposite ETH ou POL como garantia (200%+) e emita xBRL sem vender sua cripto. Sem juros. Pagou a dívida, retira a garantia.</p></div>
       <div class="card"><div class="ic">🤝</div><h3>Trabalho</h3><p>Contrate e receba com o pagamento travado em contrato. Códigos de chegada e de entrega (palavras + QR) e reputação pública.</p></div>
     </div>
   </section>
@@ -129,12 +132,23 @@
     <h2>Lastro de verdade, com proteções automáticas</h2>
     <p class="sub">Cada xBRL nasce de 1 real em stablecoin depositado na Reserva. Nenhuma regra abaixo depende de alguém apertar um botão — e nenhuma permite tirar o lastro de lá.</p>
     <div class="grade duas">
-      <div class="card ouro"><h3>🔒 Lista de lastros fixa</h3><p>BRZ e BRLA foram gravados na criação do contrato. Ninguém — nem o criador — consegue incluir outro token. Não existe "lastro falso".</p></div>
+      <div class="card ouro"><h3>🔒 Lista de lastros fixa</h3><p>BRZ, BRLA, BRL1 e wBRL foram gravados na criação do contrato. Ninguém — nem o criador — consegue incluir outro token. Não existe "lastro falso".</p></div>
       <div class="card"><h3>⚖️ Lastro a mais</h3><p>Quem traz o lastro que já sobra na reserva paga até 0,40% extra, que fica guardado como lastro adicional. A reserva tende a ter mais de 100%.</p></div>
       <div class="card"><h3>🚧 Teto diário por lastro</h3><p>No máximo 10% da reserva (mínimo 50 mil) entra por cada lastro a cada 24 h. Se um lastro perder a paridade, ninguém consegue trocá-lo pelo bom de uma vez.</p></div>
       <div class="card"><h3>🏃 Sem corrida bancária</h3><p>Acima de 1 milhão em circulação, até 20% do total pode ser resgatado por dia. O resgate nunca pode ser pausado.</p></div>
     </div>
-    <p class="aviso" style="margin-top:18px">Seja honesto com você: BRZ e BRLA são emitidos por empresas que podem congelar endereços. O xBRL em si é inconfiscável, mas o lastro de hoje depende desses emissores. O próximo passo do projeto é migrar para lastro em cripto supercolateralizada, que ninguém congela.</p>
+    <p class="aviso" style="margin-top:18px">Seja honesto com você: as stablecoins de Real são emitidas por empresas que podem congelar endereços. O xBRL em si é inconfiscável, mas essa parte do lastro depende desses emissores. Por isso existe o cofre cripto: lastro em ETH e POL, que ninguém congela.</p>
+  </section>
+
+  <section id="cofre">
+    <h2>Cofre cripto: lastro que ninguém congela</h2>
+    <p class="sub">O contrato não negocia, não empresta e não aplica a sua garantia. Ela fica parada, sua, até você pagar a dívida em xBRL (que é queimado) e retirar.</p>
+    <div class="grid">
+      <div class="card ouro"><h3>📏 Garantia de sobra</h3><p>ETH: emite até 50% do valor (200% de garantia), liquidação abaixo de 150%. POL, mais volátil: 250% e 175%.</p></div>
+      <div class="card"><h3>🔭 Preço conferido duas vezes</h3><p>Chainlink conferido com a média de 30 min da Uniswap. Se divergirem mais de 5% ou pararem, emitir e liquidar travam. Pagar dívida e depositar nunca travam.</p></div>
+      <div class="card"><h3>📉 Testado no tombo</h3><p>ETH −40% num dia: liquidação paga a dívida inteira e a sobra volta ao dono. ETH −57%: o colchão cobre a diferença. Tudo coberto por testes automáticos.</p></div>
+      <div class="card"><h3>🛟 Colchão de proteção</h3><p>Metade de toda taxa do protocolo (emissão, resgate, trabalhos, cofre) vai para um colchão em xBRL que absorve prejuízo de liquidação. A outra metade vai ao criador.</p></div>
+    </div>
   </section>
 
   <section id="uniswap">
@@ -147,12 +161,13 @@
     <p class="sub">O cliente trava o pagamento no contrato. O trabalhador recebe quando a regra da modalidade é cumprida. Taxa de 0,1% só no pagamento.</p>
     <div class="grade quatro">
       <div class="card"><div class="ic">🧹</div><h3>Presencial</h3><p>O trabalhador prova que chegou com o código/QR que fica no local — como no app de entrega do mercado. Nada de GPS falsificável.</p></div>
-      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>Código secreto de palavras (e QR) que só o destinatário tem. Código certo = pagamento na hora.</p></div>
+      <div class="card"><div class="ic">🛵</div><h3>Entrega</h3><p>Código secreto de palavras (e QR) que só o destinatário tem. Sem código, sem entrega; código certo = pagamento na hora. O entregador pode deixar caução (mín. 200 xBRL) que volta com o código de entrega ou de devolução.</p></div>
       <div class="card"><div class="ic">💻</div><h3>Remoto</h3><p>Trabalhador marca entregue; cliente aprova ou, depois de 3 dias de silêncio, o valor é liberado.</p></div>
       <div class="card"><div class="ic">🧱</div><h3>Por etapas</h3><p>De 2 a 50 parcelas iguais, cada uma com a mesma regra do remoto.</p></div>
     </div>
     <div class="grade duas" style="margin-top:16px">
-      <div class="card"><h3>⚖️ Disputa sem juiz</h3><p>Cada lado propõe uma divisão. Propostas iguais resolvem na hora. Sem acordo em 30 dias, qualquer pessoa executa 50/50.</p></div>
+      <div class="card"><h3>⚖️ Disputa com árbitros que você escolhe</h3><p>Cada lado propõe uma divisão; propostas iguais resolvem na hora. Opcional: cada parte indica um árbitro de confiança e, se os dois concordarem, está resolvido. Se quiser, o criador da rede desempata (só entre as propostas dos árbitros). Sem acordo em 30 dias, vale a média dos árbitros ou 50/50.</p></div>
+      <div class="card"><h3>💬 Conversa cifrada</h3><p>Cliente, trabalhador e árbitros conversam dentro do trabalho, com criptografia de ponta a ponta. Fica registrado para sempre, mas só eles conseguem ler.</p></div>
       <div class="card"><h3>⭐ Reputação que não se compra</h3><p>O nível (0 a 5) exige pessoas diferentes, avaliadores diferentes, volume e tempo real de conta. Repetir trabalhos falsos entre as mesmas contas não sobe ninguém de nível.</p></div>
     </div>
   </section>
@@ -173,7 +188,7 @@
     <div class="grade">
       <div class="card"><h3>O que ninguém pode fazer</h3><ul><li>Congelar ou tomar saldo de ninguém.</li><li>Sacar o lastro da Reserva.</li><li>Pausar resgates.</li><li>Mudar as taxas ou adicionar lastro.</li><li>Atualizar os contratos.</li></ul></div>
       <div class="card"><h3>O que o administrador pode</h3><ul><li>Pausar a <em>emissão</em> com um lastro em crise. Nada mais.</li></ul><p>Só isso — e está no código.</p></div>
-      <div class="card"><h3>Riscos que existem</h3><ul><li>Os lastros (BRZ, BRLA) dependem de seus emissores.</li><li>Os contratos têm testes amplos, mas ainda não passaram por auditoria externa.</li><li>Perder as 12 palavras = perder o acesso.</li></ul></div>
+      <div class="card"><h3>Riscos que existem</h3><ul><li>As stablecoins de Real dependem de seus emissores.</li><li>No cofre cripto, uma queda muito rápida pode gerar prejuízo além do colchão (fica público no contrato).</li><li>Os contratos têm testes amplos, mas ainda não passaram por auditoria externa.</li><li>Perder as 12 palavras = perder o acesso.</li></ul></div>
     </div>
   </section>
 
@@ -190,6 +205,7 @@
     <details><summary>Preciso de cadastro?</summary><p>Não. A carteira cria sua conta no próprio aparelho. Para trocar reais por BRZ/BRLA você usa a corretora ou o emissor de sua preferência.</p></details>
     <details><summary>xBRL rende juros?</summary><p>Não. xBRL não promete nem paga rendimento. Ele é um Real digital que você controla sozinho.</p></details>
     <details><summary>Quanto custa?</summary><p>Transferir xBRL não tem taxa do protocolo. Emitir, resgatar e receber pagamento de trabalho custam 0,1%. A rede Polygon cobra centavos de POL por operação.</p></details>
+    <details><summary>No cofre, recebo um NFT da minha posição?</summary><p>Hoje não: a posição fica ligada à sua carteira e só você mexe nela. Vender posições como NFT é uma possibilidade futura, num contrato novo, sem mudar as regras deste.</p></details>
     <details><summary>E se o site sair do ar?</summary><p>Seu dinheiro não está no site, está na blockchain. Com as 12 palavras você acessa por qualquer carteira compatível (MetaMask, Rabby…).</p></details>
   </section>
 </main>
@@ -204,7 +220,7 @@
 <script>
   (async () => {
     const redes = [[137, "Polygon PoS", "https://polygonscan.com"], [80002, "Polygon Amoy (teste)", "https://amoy.polygonscan.com"]];
-    const nomes = ["xBRL", "ReservaBRL", "EscrowTrabalho"];
+    const nomes = ["xBRL", "ReservaBRL", "CofreCripto", "EscrowTrabalho", "Mensageiro"];
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
     let html = "<table><thead><tr><th>Contrato</th>" + redes.map((r) => `<th>${r[1]}</th>`).join("") + "</tr></thead><tbody>";
     const dados = await Promise.all(redes.map(([id]) => fetch(`wallet/src/deployments/${id}.json`, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null)));

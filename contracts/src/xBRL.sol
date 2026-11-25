@@ -12,8 +12,9 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 ///
 /// Invariantes de soberania (não há como mudar depois do deploy):
 ///  - Sem blacklist, sem congelamento, sem pausa, sem `burnFrom` administrativo, sem proxy/upgrade.
-///  - Só a ReservaBRL pode emitir (mint). Queimar (burn) só o próprio saldo de quem chama.
-///  - A Reserva é gravada uma única vez em `inicializar`; depois disso o token não tem nenhum administrador.
+///  - Só dois contratos podem emitir (mint): a ReservaBRL (contra stablecoins de Real, 1:1) e o CofreCripto
+///    (contra ETH/POL supercolateralizados). Queimar (burn) só o próprio saldo de quem chama.
+///  - Os emissores são gravados uma única vez em `inicializar`; depois disso o token não tem administrador.
 contract xBRL is ERC20, ERC20Permit {
     /// @notice EIP-712: transferência paga em xBRL ao relayer (quem não tem POL consegue transacionar).
     /// `relayer == address(0)` permite qualquer relayer.
@@ -31,12 +32,13 @@ contract xBRL is ERC20, ERC20Permit {
         uint256 deadline;
     }
 
-    /// @notice Única emissora de xBRL (definida uma vez em `inicializar`).
+    /// @notice Emissores de xBRL (definidos uma vez em `inicializar`).
     address public reserva;
+    address public cofre;
 
     address private _inicializador;
 
-    event Inicializado(address indexed reserva);
+    event Inicializado(address indexed reserva, address indexed cofre);
     event TransferenciaComGas(
         address indexed de, address indexed para, address indexed relayer, uint256 valor, uint256 taxaGas
     );
@@ -52,15 +54,16 @@ contract xBRL is ERC20, ERC20Permit {
         _inicializador = inicializador;
     }
 
-    /// @notice Conecta a Reserva. Só pode ser chamada UMA vez, apenas pelo inicializador definido no construtor.
-    function inicializar(address reserva_) external {
+    /// @notice Conecta os dois emissores. Só pode ser chamada UMA vez, apenas pelo inicializador do construtor.
+    function inicializar(address reserva_, address cofre_) external {
         if (msg.sender != _inicializador) revert NaoAutorizado();
-        if (reserva_ == address(0)) revert EnderecoZero();
+        if (reserva_ == address(0) || cofre_ == address(0) || reserva_ == cofre_) revert EnderecoZero();
         // O evento Inicializado (abaixo) registra o fim do papel de inicializador.
         // forge-lint: disable-next-line(missing-events-access-control)
         _inicializador = address(0);
         reserva = reserva_;
-        emit Inicializado(reserva_);
+        cofre = cofre_;
+        emit Inicializado(reserva_, cofre_);
     }
 
     /// @notice `true` depois que `inicializar` foi executada (token 100% sem administração).
@@ -68,9 +71,9 @@ contract xBRL is ERC20, ERC20Permit {
         return reserva != address(0);
     }
 
-    /// @notice Emite xBRL. Somente a ReservaBRL (que recebeu o lastro antes).
+    /// @notice Emite xBRL. Somente a ReservaBRL ou o CofreCripto (que receberam a garantia antes).
     function mint(address para, uint256 valor) external {
-        if (msg.sender != reserva) revert NaoAutorizado();
+        if (msg.sender != reserva && msg.sender != cofre) revert NaoAutorizado();
         _mint(para, valor);
     }
 

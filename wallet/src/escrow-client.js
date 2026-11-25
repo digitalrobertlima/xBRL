@@ -3,7 +3,7 @@
 // Indexa os eventos direto do RPC público (sem servidor, sem The Graph), guarda em cache local,
 // e calcula a reputação Nível 0 a 5 com a MESMA regra do contrato (EscrowTrabalho.nivel).
 // =====================================================================
-import { ABIS, ESCROW } from "./config.js";
+import { ABIS, CREATOR_TREASURY, ESCROW } from "./config.js";
 import { PALAVRAS } from "./palavras-pt.js";
 
 const e = () => globalThis.ethers;
@@ -80,6 +80,16 @@ export function hashCodigo(escrow, cliente, codigo) {
   return e().keccak256(e().AbiCoder.defaultAbiCoder().encode(["address", "address", "string"], [escrow, cliente, codigo]));
 }
 
+/** keccak256(abi.encode(escrow, cliente, "devolucao", codigo)) — igual a EscrowTrabalho.hashDevolucao. */
+export function hashDevolucao(escrow, cliente, codigo) {
+  return e().keccak256(e().AbiCoder.defaultAbiCoder().encode(["address", "address", "string", "string"], [escrow, cliente, "devolucao", codigo]));
+}
+
+/** Id da conversa de um trabalho no Mensageiro: keccak256(abi.encode("trabalho", escrow, id)). */
+export function idConversa(escrow, id) {
+  return e().keccak256(e().AbiCoder.defaultAbiCoder().encode(["string", "address", "uint256"], ["trabalho", escrow, BigInt(id)]));
+}
+
 const CODIGOS = "xbrl.codigos";
 export function guardarCodigo(hash, codigo) {
   const m = JSON.parse(localStorage.getItem(CODIGOS) || "{}");
@@ -109,9 +119,9 @@ export class EscrowClient {
   _lerCache() {
     try {
       const c = JSON.parse(localStorage.getItem(this.chaveCache) || "null");
-      if (c && c.v === 2) return c;
+      if (c && c.v === 3) return c;
     } catch { /* cache corrompido: recomeça */ }
-    return { v: 2, ultimoBloco: this.blocoInicial - 1, eventos: [] };
+    return { v: 3, ultimoBloco: this.blocoInicial - 1, eventos: [] };
   }
 
   _gravarCache() {
@@ -183,6 +193,10 @@ export class EscrowClient {
           bloco: ev.bloco,
           historico: [],
           candidato: null,
+          arbitros: [],
+          caucao: 0n,
+          txCriacao: ev.tx,
+          txAceite: null,
         });
       }
       const t = mapa.get(id);
@@ -191,8 +205,18 @@ export class EscrowClient {
       if (ev.nome === "TrabalhoAceito") {
         t.trabalhador = ev.args.trabalhador;
         t.candidato = null;
+        t.txAceite ||= ev.tx;
       }
-      if (ev.nome === "CandidaturaRecebida") t.candidato = ev.args.candidato;
+      if (ev.nome === "TrabalhoConfigurado") {
+        if (ev.args.arbitroCliente !== e().ZeroAddress) t.arbitros = [ev.args.arbitroCliente];
+        t.caucao = BigInt(ev.args.caucao);
+        t.desempateCriador = ev.args.desempateCriador;
+      }
+      if (ev.nome === "ArbitroDoTrabalhador") t.arbitros = [t.arbitros[0], ev.args.arbitro].filter(Boolean);
+      if (ev.nome === "CandidaturaRecebida") {
+        t.candidato = ev.args.candidato;
+        t.txAceite = ev.tx;
+      }
       if (ev.nome === "CandidaturaEncerrada") t.candidato = null;
       if (ev.nome === "TrabalhoCancelado") t.encerrado = true;
     }
@@ -201,8 +225,17 @@ export class EscrowClient {
 
   /** Lê o estado atual on-chain de um trabalho. */
   async detalhe(id) {
-    const t = await this.contrato.trabalho(id);
+    const [t, a, c] = await Promise.all([this.contrato.trabalho(id), this.contrato.arbitragem(id), this.contrato.caucao(id)]);
     return {
+      arbitroCliente: a.arbitroCliente,
+      arbitroTrabalhador: a.arbitroTrabalhador,
+      propostaArbCliente: Number(a.propostaArbCliente),
+      propostaArbTrabalhador: Number(a.propostaArbTrabalhador),
+      propostasEm: Number(a.propostasEm),
+      desempateCriador: a.desempateCriador,
+      caucao: c.valor,
+      caucaoTravada: c.travada,
+      devolucaoHash: c.devolucaoHash,
       id: String(id),
       cliente: t.cliente,
       prazo: Number(t.prazo),
@@ -234,16 +267,22 @@ export class EscrowClient {
     const mapa = this.resumoTrabalhos();
     const meus = [];
     const vagas = [];
+    const arbitragens = [];
+    const souCriador = eu === CREATOR_TREASURY.toLowerCase();
     for (const t of mapa.values()) {
       const souCliente = t.cliente.toLowerCase() === eu;
       const souTrab = (t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu);
+      const souArbitro = t.arbitros.some((x) => x.toLowerCase() === eu) || (souCriador && t.desempateCriador);
       const aberta = t.trabalhador === zero && !t.candidato && !t.encerrado && t.prazo > Math.floor(Date.now() / 1000);
       if (souCliente || souTrab) meus.push(t);
+      else if (souArbitro) arbitragens.push(t);
       else if (aberta) vagas.push(t);
     }
-    meus.sort((a, b) => b.bloco - a.bloco);
-    vagas.sort((a, b) => b.bloco - a.bloco);
-    return { meus, vagas };
+    const ord = (a, b) => b.bloco - a.bloco;
+    meus.sort(ord);
+    vagas.sort(ord);
+    arbitragens.sort(ord);
+    return { meus, vagas, arbitragens };
   }
 
   async reputacao(conta) {
@@ -257,11 +296,17 @@ export class EscrowClient {
 
   /** Ações que a conta pode executar agora sobre o trabalho (espelha as regras do contrato). */
   acoesPossiveis(t, conta, agora = Math.floor(Date.now() / 1000)) {
+    const z = e().ZeroAddress;
     const eu = conta.toLowerCase();
     const souCliente = t.cliente.toLowerCase() === eu;
     const souTrab = t.trabalhador.toLowerCase() === eu;
-    const vaga = t.trabalhador === e().ZeroAddress;
+    const souArbC = t.arbitroCliente && t.arbitroCliente !== z && t.arbitroCliente.toLowerCase() === eu;
+    const souArbT = t.arbitroTrabalhador && t.arbitroTrabalhador !== z && t.arbitroTrabalhador.toLowerCase() === eu;
+    const souCriador = eu === CREATOR_TREASURY.toLowerCase();
+    const vaga = t.trabalhador === z;
     const presencial = t.modalidade === 0;
+    const entrega = t.modalidade === 1;
+    const temCodigo = t.codigoHash !== e().ZeroHash;
     const a = [];
     switch (t.estado) {
       case 0: // Aberto
@@ -276,23 +321,35 @@ export class EscrowClient {
         break;
       case 1: // Aceito
         if (souTrab && presencial && !t.chegou) a.push("confirmarChegada");
-        if (souTrab && t.modalidade !== 1 && (!presencial || t.chegou)) a.push("marcarEntregue");
-        if (t.codigoHash !== e().ZeroHash && (!presencial || t.chegou) && (souTrab || souCliente)) a.push("confirmarComCodigo");
+        if (souCliente && presencial && !t.chegou) a.push("chegadaPeloCliente");
+        if (souTrab && !entrega && (!presencial || t.chegou)) a.push("marcarEntregue");
+        if (temCodigo && (!presencial || t.chegou) && (souTrab || souCliente)) a.push("confirmarComCodigo");
+        if (t.caucaoTravada && (souTrab || souCliente)) a.push("confirmarDevolucao");
         if (souCliente) a.push("liberar");
-        if (souTrab) a.push("desistir");
-        if (souCliente || souTrab) a.push("abrirDisputa");
+        if (souTrab && !t.caucaoTravada) a.push("desistir");
+        if ((souCliente || souTrab) && !entrega) a.push("abrirDisputa");
         if (souCliente && agora > t.prazo) a.push("reembolsarPorPrazo");
         break;
       case 2: // Entregue
         if (souCliente) a.push("liberar");
         if (souTrab && agora >= t.entregueEm + ESCROW.prazoRevisaoDias * 86400) a.push("reivindicar");
-        if (t.codigoHash !== e().ZeroHash && (souTrab || souCliente)) a.push("confirmarComCodigo");
-        if (souCliente || souTrab) a.push("abrirDisputa");
+        if (temCodigo && (souTrab || souCliente)) a.push("confirmarComCodigo");
+        if ((souCliente || souTrab) && !entrega) a.push("abrirDisputa");
         break;
-      case 3: // Disputa
+      case 3: { // Disputa
         if (souCliente || souTrab) a.push("proporAcordo");
+        if (souArbC || souArbT) a.push("arbitrar");
+        if (souCriador && t.desempateCriador) {
+          const prazo = ESCROW.prazoArbitrosDias * 86400;
+          const comArbitros = t.arbitroCliente !== z;
+          const pronto = comArbitros
+            ? t.propostaArbCliente && t.propostaArbTrabalhador && agora >= t.propostasEm + prazo
+            : agora >= t.disputaEm + prazo;
+          if (pronto) a.push("desempatar");
+        }
         if (agora >= t.disputaEm + ESCROW.prazoDisputaDias * 86400) a.push("resolverPorTempo");
         break;
+      }
       case 4: // Concluído
         if (BigInt(t.valor) >= BigInt(ESCROW.valorMinimoAvaliacao) * 10n ** 18n) {
           if (souCliente && !t.clienteAvaliou) a.push("avaliar");

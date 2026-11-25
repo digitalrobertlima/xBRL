@@ -23,10 +23,10 @@ export const REDES = {
     explorer: "https://polygonscan.com",
     // RPCs públicos, sem cadastro. A carteira usa todos com fallback automático.
     rpcs: [
-      "https://polygon-bor-rpc.publicnode.com",
-      "https://polygon-rpc.com",
-      "https://1rpc.io/matic",
       "https://polygon.drpc.org",
+      "https://1rpc.io/matic",
+      "https://polygon-rpc.com",
+      "https://polygon-bor-rpc.publicnode.com", // por último: recusa (403) algumas consultas sem chave
     ],
     prioridadeMinimaGwei: 30n, // Polygon exige gorjeta mínima ~25–30 gwei
     tokens: [

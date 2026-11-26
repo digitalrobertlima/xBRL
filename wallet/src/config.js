@@ -7,7 +7,7 @@ import { ABIS } from "./abis.js";
 
 export { ABIS };
 
-export const VERSAO = "3.6.0";
+export const VERSAO = "3.6.1";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
 export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 

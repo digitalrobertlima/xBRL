@@ -42,19 +42,20 @@ Documento vivo: o que já está pronto, o que falta antes de divulgar em grande 
 ## 3. Primeiro anúncio: pastel e caldo de cana (passo a passo)
 
 1. **Tenha um pouco de POL** (taxa da rede; centavos por anúncio). Pela Caixa Forte: Trocar → POL.
-2. Abra o BRLS → aba **🛍️ Vitrine** → **🗂️ Meus anúncios e loja** → **🏪 Criar minha loja**.
-   - Nome: *Pastelândia*; horário; endereço de retirada no mapa (📍, só aparece para entregadores);
-     bairro e cidade; quem entrega (a própria loja ou entregador da rede) e a taxa de entrega.
-   - Foto da fachada ou do logo. **Segure para publicar.**
-3. **➕ Novo anúncio** → categoria **🍔 Comida**:
-   - *Pastel de carne* — preço — descrição — opções (ex.: "com queijo + R$ 3,00") — foto.
-   - *Caldo de cana 500 ml* — preço — opções (ex.: "com limão", "700 ml + R$ 3,00") — foto.
+2. Abra o BRLS → aba **🛍️ Vitrine** → **➕ Anunciar** → categoria **🍔 Comida**. **Não precisa criar loja.**
+   - *Pastel* — preço base — **Sabores** (o cliente escolhe um): Carne, Queijo, Frango, Pizza, Banana (cada um
+     pode ter acréscimo, ex.: Queijo + R$ 1,00) — **Adicionais** (opcional, ex.: Catupiry + R$ 2,00) — foto.
+   - *Caldo de cana 500 ml* — preço — **Sabores**: Com limão, Sem limão.
+   - Entrega: "Retirar ou combinar" ou "O vendedor entrega" (com taxa de entrega). Bairro e cidade.
+   - **Segure para publicar.**
+3. (Opcional) **🗂️ Meus anúncios e loja → 🏪 Criar minha loja**: nome, horário, foto, endereço de retirada e
+   **entregador da rede** (carro, moto ou bicicleta) com a taxa de entrega.
 4. Em **Meus anúncios e loja**, toque em **🔔 Receber pedidos com aviso**. No APK, o celular mostra o aviso fixo
    "BRLS de plantão" enquanto estiver recebendo.
-5. Quando chegar um pedido: abra-o, toque em **aceitar**. Com entrega própria, peça o **código de entrega** ao
-   cliente na porta (com a comida na mão dele) e digite para receber. Com entregador da rede, o entregador
-   mostra o **código de retirada** ao buscar: digite para receber.
-6. Acabou o pastel? Abra o anúncio → **⏸️ Pausar**. Mudou o preço? **✏️ Editar** (vale a última versão).
+5. Quando chegar um pedido (os sabores aparecem nele): abra-o e toque em **aceitar**. Na entrega, peça o
+   **código de entrega** ao cliente (com a comida na mão dele) e digite para receber. Com entregador da rede, o
+   entregador mostra o **código de retirada** ao buscar: digite para receber.
+6. Acabou? Abra o anúncio → **⏸️ Pausar**. Mudou o preço ou um sabor? **✏️ Editar** (vale a última versão).
 
 ## 4. Antes de procurar canais grandes de finanças
 

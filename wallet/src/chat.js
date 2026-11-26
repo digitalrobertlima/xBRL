@@ -66,7 +66,11 @@ export class Chat {
       if (pub || !hash) break;
       try {
         const tx = await this.provider.getTransaction(hash);
-        if (!tx || tx.from.toLowerCase() !== k) continue;
+        if (!tx) continue;
+        if (tx.from.toLowerCase() !== k) {
+          pub = await this.chaveDoPedidoSemGas(tx, k); // quem estava sem POL assinou o pedido; outra pessoa enviou
+          continue;
+        }
         const completa = E().Transaction.from({
           type: tx.type, to: tx.to, nonce: tx.nonce, gasLimit: tx.gasLimit, gasPrice: tx.type === 2 ? null : tx.gasPrice,
           maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas, data: tx.data, value: tx.value,
@@ -81,6 +85,28 @@ export class Chat {
       else this.chaves.set(k, pub);
     }
     return pub;
+  }
+
+  /**
+   * Pedido sem gás (ERC-2771): a transação é de quem enviou, mas o pedido dentro dela foi assinado por `conta`.
+   * A chave pública sai dessa assinatura (EIP-712), com o nonce que o Encaminhador registrou no evento.
+   */
+  async chaveDoPedidoSemGas(tx, conta) {
+    if (!this.encaminhador || tx.to?.toLowerCase() !== this.encaminhador.toLowerCase()) return null;
+    const it = new (E().Interface)(ABIS.Encaminhador);
+    const f = it.parseTransaction({ data: tx.data });
+    if (f?.name !== "execute") return null;
+    const r = f.args[0];
+    if (r.from.toLowerCase() !== conta) return null;
+    const recibo = await this.provider.getTransactionReceipt(tx.hash);
+    const ev = recibo?.logs.map((l) => { try { return l.address.toLowerCase() === this.encaminhador.toLowerCase() ? it.parseLog(l) : null; } catch { return null; } }).find((x) => x?.name === "ExecutedForwardRequest" && x.args.signer.toLowerCase() === conta);
+    if (!ev) return null;
+    const fwd = new (E().Contract)(this.encaminhador, ABIS.Encaminhador, this.provider);
+    const d = await fwd.eip712Domain();
+    const tipos = { ForwardRequest: [{ name: "from", type: "address" }, { name: "to", type: "address" }, { name: "value", type: "uint256" }, { name: "gas", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint48" }, { name: "data", type: "bytes" }] };
+    const h = E().TypedDataEncoder.hash({ name: d.name, version: d.version, chainId: d.chainId, verifyingContract: d.verifyingContract }, tipos, { from: r.from, to: r.to, value: r.value, gas: r.gas, nonce: ev.args.nonce, deadline: r.deadline, data: r.data });
+    const p = E().SigningKey.recoverPublicKey(h, r.signature);
+    return E().computeAddress(p).toLowerCase() === conta ? "0x" + p.slice(4) : null;
   }
 
   /** Lê e decifra as mensagens da conversa que são para `carteira`. */

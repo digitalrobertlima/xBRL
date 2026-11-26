@@ -7,6 +7,8 @@
 - **Público:** brasileiro comum, inclusive quem mal usa Pix. Linguagem simples, em português, sem jargão.
 - **Site:** https://digitalrobertlima.github.io/xBRL (landing em `/`, carteira em `/wallet/`).
 - **Sem servidor 24h.** Tudo é estático (GitHub Pages) + blockchain + RPCs públicos. Não adicionar backend, banco, analytics, CDN externo ou fontes remotas.
+  Exceção decidida pelo dono (26/11/2026): **mapa** = imagens do OpenStreetMap + busca do Nominatim (só ao tocar em "Buscar", máx. 1/s), por `fetch` (no APK, pelo Tor).
+  **Pendente de confirmação do dono:** correio dos pedidos sem gás pelo ntfy.sh (serviço público, sem conta). Se ele recusar, tirar `correio.js` (o QR/link continua).
 
 ## 2. Endereços fixos
 | Item | Valor |
@@ -46,6 +48,8 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 - Máquina de estados em `wallet/src/app.js` (`TRANSICOES`): telas só mudam por transições declaradas; o "voltar" do aparelho não fura o bloqueio.
 - Chave: BIP-39 de 12 ou 24 palavras (importa 12/15/18/21/24), em inglês ou português (lista oficial, a mesma da Caixa Forte; idioma descoberto pelas palavras, `keystore.js`), caminho `m/44'/60'/0'/0/0`, cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
 - Mover dinheiro = **segurar para confirmar** (1,2 s). Desbloquear = **deslizar + PIN**.
+- **Mapa** (`wallet/src/mapa.js`, sem biblioteca): endereço de corrida, presencial e entrega marcado no mapa com coordenada exata ("Estou aqui" + arrastar o pino, ou busca). A coordenada vai **cifrada** só para quem vai até lá (`📍 lat,lon` no texto) e vira botões Waze / Google Maps / GPS do celular (no APK: mensagem `gps` → `RdeskNative.openGeo`). A localização do aparelho só ajuda a marcar o ponto; nunca é prova (a prova é o código).
+- **Correio dos pedidos sem gás** (`wallet/src/correio.js`, pendente de confirmação do dono): o pedido assinado também vai para o tópico do trabalho; o app da outra parte mostra o aviso e ela **aceita ou recusa** (aceitar um candidato já o aprova). O app confere assinatura, prazo, trabalho e autor antes de mostrar. A chave da conversa de quem só usou pedido sem gás sai da assinatura EIP-712 (`Chat.chaveDoPedidoSemGas`).
 - Chegada/entrega: código em palavras ou QR (gerado no aparelho com `vendor/qrcode.mjs`, MIT; leitura via `BarcodeDetector`, com digitação como alternativa). Nunca GPS.
 - Biometria (WebAuthn PRF) oferecida logo após criar o PIN.
 - Conversa (`wallet/src/chat.js`): chave pública do outro vem do Mensageiro ou da assinatura de uma transação dele no Escrow, sempre conferida contra o endereço.

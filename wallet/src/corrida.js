@@ -8,7 +8,8 @@
 //   4. Ao entrar no veículo, o passageiro confirma o embarque.
 //   5. No destino, o passageiro mostra o código: o motorista digita ou lê o QR e recebe na hora.
 //      (Ou o passageiro mesmo toca em "pagar agora".)
-// Sem GPS (falsificável) e sem servidor: os pedidos aparecem para quem estiver com o app aberto.
+// Sem servidor: os pedidos aparecem para quem estiver com o app aberto. Embarque e destino são marcados
+// no mapa (coordenada exata, mapa.js); o GPS nunca é prova de nada — a prova é o código.
 // =====================================================================
 
 export const VEICULOS = {
@@ -42,9 +43,10 @@ export function lerCorrida(descricao) {
 
 export const ehCorrida = (descricao) => lerCorrida(descricao) !== null;
 
-/** Texto privado (vai cifrado só para o motorista aprovado). */
+/** Texto privado (vai cifrado só para o motorista aprovado), com a coordenada exata de cada ponto. */
 export function enderecoCorrida(embarque, destino) {
-  return `🟢 Embarque: ${limpar(embarque, 120)}\n🏁 Destino: ${limpar(destino, 120)}`;
+  const linha = (p) => (typeof p === "string" ? limpar(p, 120) : `${limpar([p.endereco, p.complemento].filter(Boolean).join(", ") || "Ponto marcado no mapa", 120)}\n📍 ${Number(p.lat).toFixed(5)},${Number(p.lon).toFixed(5)}`);
+  return `🟢 Embarque: ${linha(embarque)}\n🏁 Destino: ${linha(destino)}`;
 }
 
 /** Em que passo a corrida está, em palavras simples (para passageiro e motorista). */
@@ -54,7 +56,7 @@ export function passoCorrida(t, souPassageiro) {
   if (t.estado === 3) return { n: 4, texto: "Em disputa." };
   if (t.estado === 0 && !t.pendenteAprovacao) return { n: 1, texto: souPassageiro ? "Procurando motorista… deixe o app aberto." : "Pedido aberto: toque em aceitar para se candidatar." };
   if (t.estado === 0 && t.pendenteAprovacao) return { n: 2, texto: souPassageiro ? "Um motorista quer fazer sua corrida: confira a reputação e aprove." : "Você se candidatou: aguarde o passageiro aprovar." };
-  if (t.estado === 1 && !t.chegou) return { n: 3, texto: souPassageiro ? "Motorista a caminho. Quando entrar no veículo, toque em \"Entrei no veículo\"." : "Vá até o embarque (endereço na conversa). Peça ao passageiro para confirmar quando entrar." };
+  if (t.estado === 1 && !t.chegou) return { n: 3, texto: souPassageiro ? "Motorista a caminho. Quando entrar no veículo, toque em \"Entrei no veículo\"." : "Vá até o embarque: toque em Waze ou Google Maps abaixo. Peça ao passageiro para confirmar quando entrar." };
   if (t.estado === 1 && t.chegou) return { n: 4, texto: souPassageiro ? "Em viagem. No destino, mostre o código ao motorista (ou toque em pagar)." : "Em viagem. No destino, peça o código ao passageiro para receber." };
   return { n: 4, texto: "Em andamento." };
 }

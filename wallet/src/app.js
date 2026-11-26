@@ -18,6 +18,8 @@ import { ProvedorRotativo } from "./rpc.js";
 import { AssinanteExterno, conectarInjetada, procurarPonte, temInjetada } from "./externa.js";
 import qrcode from "./vendor/qrcode.mjs";
 import { VEICULOS, VALIDADES_HORAS, descricaoCorrida, lerCorrida, enderecoCorrida, passoCorrida } from "./corrida.js";
+import { escolherPonto, botoesGps, textoDoPonto, coordenadasNoTexto, fmtCoord } from "./mapa.js";
+import * as CO from "./correio.js";
 
 const E = globalThis.ethers;
 const $ = (s, r = document) => r.querySelector(s);
@@ -247,6 +249,7 @@ async function conectarRede(chainId) {
   S.beta = beta && S.imp && beta.xBRL.toLowerCase() !== S.imp.xBRL.toLowerCase() ? beta : null;
   S.escrow = S.imp ? new EscrowClient(S.provider, chainId, S.imp.EscrowTrabalho, S.imp.blocoInicial) : null;
   S.chat = S.imp ? new Chat(S.provider, S.imp.Mensageiro, S.imp.blocoInicial) : null;
+  if (S.chat) S.chat.encaminhador = S.imp.Encaminhador || null;
   const chip = $("#rede");
   chip.textContent = S.rede.curto;
   chip.classList.toggle("teste", chainId !== 137);
@@ -347,6 +350,24 @@ async function pedirSemGas(titulo, passos) {
   const texto = await SG.assinar(S.carteira, S.provider, S.imp.Encaminhador, chamadas, permit);
   const link = `${location.origin}${location.pathname}#${texto}`;
   S.pedidoProprio = link;
+  // Dentro de um trabalho: manda direto para o app da outra parte (ela aceita ou recusa)
+  const t = S.tela === "TRABALHO" ? S.params.t : null;
+  let postado = false;
+  if (t) {
+    modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Mandando o pedido para o app da outra pessoa…</p>`);
+    postado = await CO.postar(S.chainId, S.imp.EscrowTrabalho, t.id, texto).catch(() => false);
+  }
+  if (postado) {
+    const cor = lerCorrida(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao);
+    const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
+    const quem = cor ? (souCliente ? "do motorista" : "do passageiro") : souCliente ? "do trabalhador" : "do cliente";
+    modal(`<h2>📨 Pedido enviado</h2>
+      <p>Você está sem POL, então assinou de graça: <b>${esc(titulo)}</b>. O pedido foi <b>direto para o app ${quem}</b>, que vai ver um aviso para aceitar ou recusar (e paga a taxa, centavos).</p>
+      <p class="mudo">Esta tela atualiza sozinha quando a pessoa aceitar. Ela precisa estar com o app BRLS aberto. O pedido vale por 2 horas.</p>
+      <details class="cartao"><summary>Estão juntos? Mostrar o QR</summary>${qrSvg(texto)}<button class="btn sec" data-acao="semgas-compartilhar">📤 Mandar por WhatsApp/link</button></details>
+      <button class="btn prim" data-acao="fechar-modal">Ok, vou aguardar</button>`);
+    return null;
+  }
   modal(`<h2>⛽ Sem POL? Sem problema</h2>
     <p>Você assinou: <b>${esc(titulo)}</b>. Agora peça para a outra pessoa (o cliente, por exemplo) <b>ler este QR</b> no app BRLS dela, em <b>Trabalhos → 📷 Ler pedido sem gás</b>. Ela paga a taxa e a ação vale como sua.</p>
     ${qrSvg(texto)}
@@ -1107,6 +1128,32 @@ TELAS.TRABALHOS = async () => {
     ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
 };
 
+// ---------- Ponto exato no mapa (mapa.js) ----------
+function botaoPonto(titulo, p, acaoMapa) {
+  return `<p class="rotulo-ponto">${esc(titulo)}</p><button type="button" class="ponto ${p ? "marcado" : ""}" data-acao="${esc(acaoMapa)}">${p
+    ? `<span class="ic">📍</span><span class="meio"><b>${esc(p.endereco || "Ponto marcado no mapa")}</b><span class="mudo">${p.complemento ? esc(p.complemento) + " · " : ""}${esc(fmtCoord(p.lat, p.lon))} · toque para mudar</span></span>`
+    : `<span class="ic">🗺️</span><span class="meio"><b>Marcar no mapa</b><span class="mudo">Procure o endereço ou use "Estou aqui" e ajuste o pino</span></span>`}</button>`;
+}
+
+async function marcarPontoCorrida(qual) {
+  const de = qual === "de";
+  const p = await escolherPonto({ titulo: de ? "🟢 Onde você vai embarcar?" : "🏁 Para onde você vai?", inicial: de ? S.corrida.dePonto : S.corrida.paraPonto, dica: de ? "Toque em \"Estou aqui\" ou procure o endereço. Arraste até o pino ficar onde o carro deve parar." : "Procure o endereço do destino e ajuste o pino." });
+  if (!p) return;
+  S.corrida[de ? "dePonto" : "paraPonto"] = p;
+  if (p.bairro) S.corrida[de ? "de" : "para"] = p.bairro;
+  render();
+}
+
+/** Abre um ponto no app de GPS. No APK (Tor) quem abre é a Caixa Forte; fora dele, o link normal. */
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest("[data-gps]");
+  if (!a || !REDE_PELA_PONTE) return;
+  ev.preventDefault();
+  const [lat, lon] = a.dataset.gps.split(",").map(Number);
+  window.parent.postMessage({ brls: 1, tipo: "gps", lat, lon, app: a.dataset.app }, "*");
+  toast("Abrindo no GPS…");
+}, true);
+
 // ---------- Corrida (trabalho presencial com vaga aberta; ver corrida.js) ----------
 const minhasCorridas = (meus) => meus.filter((t) => lerCorrida(t.descricao) && !t.encerrado);
 function cartaoCorrida(t, souPassageiro) {
@@ -1124,10 +1171,10 @@ TELAS.CORRIDA = async () => {
     <div class="cartao">
       <h2 style="margin-top:0">Pedir uma corrida</h2>
       <div class="grade duas" role="group" aria-label="Veículo">${Object.values(VEICULOS).map((x) => `<button class="atalho" data-acao="cor-veiculo-${x.id}" aria-pressed="${x.id === v}"><span>${x.icone}</span>${x.nome}</button>`).join("")}</div>
-      <label for="cor-de">🟢 Bairro de embarque (público)</label><input id="cor-de" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(S.corrida.de || "")}">
-      <label for="cor-de-end">Endereço exato do embarque (privado)</label><input id="cor-de-end" maxlength="120" placeholder="Rua, número, referência" value="${esc(S.corrida.deEnd || "")}">
-      <label for="cor-para">🏁 Bairro de destino (público)</label><input id="cor-para" maxlength="40" placeholder="Ex.: Centro, Belo Horizonte" value="${esc(S.corrida.para || "")}">
-      <label for="cor-para-end">Endereço exato do destino (privado)</label><input id="cor-para-end" maxlength="120" placeholder="Rua, número, referência" value="${esc(S.corrida.paraEnd || "")}">
+      ${botaoPonto("🟢 Onde você vai embarcar", S.corrida.dePonto, "cor-mapa-de")}
+      <label for="cor-de">Bairro de embarque (é o que os motoristas veem)</label><input id="cor-de" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(S.corrida.de || "")}">
+      ${botaoPonto("🏁 Para onde você vai", S.corrida.paraPonto, "cor-mapa-para")}
+      <label for="cor-para">Bairro de destino (é o que os motoristas veem)</label><input id="cor-para" maxlength="40" placeholder="Ex.: Centro, Belo Horizonte" value="${esc(S.corrida.para || "")}">
       ${VEICULOS[v].maxPessoas > 1 ? `<label for="cor-pessoas">Quantas pessoas</label><select id="cor-pessoas">${[1, 2, 3, 4].map((n) => `<option ${n === S.corrida.pessoas ? "selected" : ""}>${n}</option>`).join("")}</select>` : ""}
       <label for="cor-obs">Observação (opcional, pública)</label><input id="cor-obs" maxlength="60" placeholder="Ex.: mala grande, pet pequeno" value="${esc(S.corrida.obs || "")}">
       <label for="cor-valor">Quanto você paga pela corrida (BRLS)</label><input id="cor-valor" class="grande" inputmode="decimal" placeholder="0,00" value="${esc(S.corrida.valor || "")}">
@@ -1137,13 +1184,13 @@ TELAS.CORRIDA = async () => {
         <label for="cor-kit">⛽ Gás para o motorista (POL)</label><input id="cor-kit" inputmode="decimal" value="${esc(S.corrida.kit ?? "0,3")}">
         <p class="mudo">Chega ao motorista quando você aprovar ele, para ele nunca travar por falta de taxa. Se ninguém fizer a corrida, volta para você.</p>
       </details>
-      <div class="ok">🔒 Os endereços exatos <b>não</b> vão para a blockchain: só o motorista que você aprovar recebe, pela conversa cifrada. Ninguém vê sua localização: o app não usa GPS.</div>
+      <div class="ok">🔒 Os pontos exatos <b>não</b> vão para a blockchain: só o motorista que você aprovar recebe, pela conversa cifrada, e abre direto no Waze ou no Google Maps dele.</div>
       ${botaoSegurar("travar o pagamento e pedir", "pedir-corrida")}
       <p class="mudo">O valor fica travado no contrato até o fim da corrida. Se ninguém aceitar no prazo, você pega de volta. Taxa de 0,1% só quando o motorista recebe.</p>
     </div>
     <button class="btn sec" data-ir="MOTORISTA">🚗 Sou motorista: ver pedidos</button>`);
   // Guarda o que a pessoa digita (se a tela for redesenhada, nada se perde)
-  for (const [id, k] of [["cor-de", "de"], ["cor-de-end", "deEnd"], ["cor-para", "para"], ["cor-para-end", "paraEnd"], ["cor-obs", "obs"], ["cor-valor", "valor"], ["cor-kit", "kit"]]) {
+  for (const [id, k] of [["cor-de", "de"], ["cor-para", "para"], ["cor-obs", "obs"], ["cor-valor", "valor"], ["cor-kit", "kit"]]) {
     $(`#${id}`)?.addEventListener("input", (ev) => (S.corrida[k] = ev.target.value));
   }
   $("#cor-pessoas")?.addEventListener("change", (ev) => (S.corrida.pessoas = Number(ev.target.value)));
@@ -1158,16 +1205,19 @@ async function atualizarCorridasAtivas() {
   await S.escrow.sincronizar();
   const { meus } = await S.escrow.listar(S.endereco);
   if (!$("#corridas-ativas")) return;
-  const ativas = minhasCorridas(meus);
-  if (!ativas.length) { box.innerHTML = ""; return; }
   const eu = S.endereco.toLowerCase();
-  const itens = await Promise.all(ativas.slice(0, 5).map(async (r) => {
-    const t = await S.escrow.detalhe(r.id).catch(() => null);
-    if (!t || t.estado >= 4) return "";
+  const det = (await Promise.all(minhasCorridas(meus).slice(0, 5).map((r) => S.escrow.detalhe(r.id).then((t) => ({ r, t })).catch(() => null)))).filter((x) => x && x.t.estado < 4);
+  const itens = det.map(({ r, t }) => {
     const souP = t.cliente.toLowerCase() === eu;
     return `<div class="cartao corrida-ativa">${cartaoCorrida({ ...r, valor: t.valor }, souP)}<p class="passo-corrida">${esc(passoCorrida(t, souP).texto)}</p></div>`;
-  }));
-  box.innerHTML = itens.join("") ? `<h2>Em andamento</h2>${itens.join("")}` : "";
+  }).join("");
+  const html = itens ? `<h2>Em andamento</h2><div id="cor-correio"></div>${itens}` : "";
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+  }
+  // Motorista sem POL querendo a corrida, ou a outra parte pedindo para você enviar por ela
+  await mostrarCorreio($("#cor-correio"), det.map((x) => x.t), null);
 }
 
 /** Repete `fn` a cada `ms` enquanto a tela `nome` estiver aberta e o app visível (sem redesenhar a tela toda). */
@@ -1193,7 +1243,8 @@ TELAS.MOTORISTA = async () => {
     <p class="mudo" id="mot-status">Procurando pedidos… deixe esta tela aberta: ela atualiza sozinha e avisa com vibração quando chega pedido novo.</p>
     <div id="mot-lista"><div class="giro"></div></div>
     <div id="mot-minhas"></div>
-    <div class="aviso">Antes de aceitar: o passageiro paga o que está escrito, preço fechado. O dinheiro já está travado no contrato. Você recebe no destino com o código que o passageiro mostra.</div>`);
+    <div class="aviso">Antes de aceitar: o passageiro paga o que está escrito, preço fechado. O dinheiro já está travado no contrato. Você recebe no destino com o código que o passageiro mostra.</div>
+    <p class="mudo">⛽ Sem POL? Pode aceitar assim mesmo: o pedido vai direto para o app do passageiro, ele aceita você e paga a taxa. O gás da corrida chega para você na hora.</p>`);
   atualizarPedidos();
   vigiar("MOTORISTA", atualizarPedidos, 10000);
 };
@@ -1221,7 +1272,7 @@ async function atualizarPedidos() {
   if (mb) mb.innerHTML = minhas.length ? `<h2>Suas corridas</h2>${minhas.map((t) => cartaoCorrida(t, false)).join("")}` : "";
 }
 
-function avisarNovoPedido() {
+function avisarNovoPedido(texto = "🚗 Pedido de corrida novo!") {
   try { navigator.vibrate?.([120, 60, 120]); } catch { /* sem vibração */ }
   try {
     const ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -1234,15 +1285,15 @@ function avisarNovoPedido() {
     o.start();
     o.stop(ac.currentTime + 0.35);
   } catch { /* sem som */ }
-  toast("🚗 Pedido de corrida novo!");
+  toast(texto);
 }
 
 async function pedirCorrida() {
   const r = S.corrida;
   const ler = (id) => ($(`#${id}`)?.value || "").trim();
-  const de = ler("cor-de"), para = ler("cor-para"), deEnd = ler("cor-de-end"), paraEnd = ler("cor-para-end");
+  const de = ler("cor-de"), para = ler("cor-para");
+  if (!r.dePonto || !r.paraPonto) throw new Error("Marque no mapa o ponto exato do embarque e do destino: é o que o motorista usa no GPS (só o motorista aprovado vê)");
   if (de.length < 3 || para.length < 3) throw new Error("Informe o bairro de embarque e o de destino");
-  if (deEnd.length < 6 || paraEnd.length < 6) throw new Error("Informe o endereço exato do embarque e do destino: só o motorista aprovado vai ver");
   const valor = lerValor(ler("cor-valor"), 18);
   if (valor === 0n) throw new Error("Informe quanto você paga pela corrida");
   const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
@@ -1272,7 +1323,7 @@ async function pedirCorrida() {
     devolucaoHash: E.ZeroHash,
     descricao: descricaoCorrida({ veiculo: r.veiculo, de, para, pessoas: r.pessoas, obs: ler("cor-obs") }),
   };
-  try { localStorage.setItem(`xbrl.endereco.${chegadaHash}`, enderecoCorrida(deEnd, paraEnd)); } catch { /* sem armazenamento */ }
+  try { localStorage.setItem(`xbrl.endereco.${chegadaHash}`, enderecoCorrida(r.dePonto, r.paraPonto)); } catch { /* sem armazenamento */ }
   await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
   S.corrida = { veiculo: r.veiculo, pessoas: 1, validade: r.validade };
   modal(`<h2>✅ Corrida pedida</h2>
@@ -1291,6 +1342,8 @@ TELAS.TRABALHO_NOVO = () => {
     <label for="tn-desc">O que precisa ser feito</label><input id="tn-desc" maxlength="100" placeholder="Ex.: Escrever uma mensagem num papel">
     ${m === 0 || m === 1 ? `<label for="tn-regiao">📍 Bairro e cidade ${m === 1 ? "da entrega" : "do serviço"} (obrigatório, aparece para todos)</label><input id="tn-regiao" maxlength="36" placeholder="Ex.: Savassi, Belo Horizonte">
     <label for="tn-endereco">🏠 Endereço completo (obrigatório)</label><input id="tn-endereco" maxlength="200" placeholder="Rua, número, complemento, referência">
+    <button type="button" class="btn sec" data-acao="tn-mapa">🗺️ Marcar o ponto exato no mapa</button>
+    <p class="mudo" id="tn-ponto">${S.params.ponto ? `📍 Ponto marcado: ${esc(fmtCoord(S.params.ponto.lat, S.params.ponto.lon))}` : "Recomendado: com o ponto no mapa, a pessoa abre direto no GPS dela."}</p>
     <p class="mudo">Por segurança, o endereço completo não fica público: só a pessoa aceita vê, pela conversa cifrada do trabalho.</p>` : ""}
     <label for="tn-kit">⛽ Gás para o trabalhador (POL)</label><input id="tn-kit" inputmode="decimal" value="1">
     <p class="mudo">Vai junto com o pagamento e chega na carteira de quem for trabalhar, para a pessoa nunca travar por falta de taxa: 1 POL dá para dezenas de operações. Se ninguém aceitar, volta para você. Pode diminuir ou deixar 0.</p>
@@ -1383,12 +1436,14 @@ TELAS.TRABALHO = async () => {
         ${t.estado === 3 ? `<div class="linha"><span>Propostas dos árbitros</span><b>${propArb(t.propostaArbCliente)} · ${propArb(t.propostaArbTrabalhador)}</b></div>` : ""}` : ""}
       ${t.desempateCriador ? `<div class="linha"><span>Desempate</span><b>criador da rede (opcional)</b></div>` : ""}
     </div>
-    ${semPol ? `<div class="aviso">⛽ Você está sem POL. Tudo bem: ao tocar numa ação, o app gera um <b>QR</b> para a outra pessoa enviar por você (ela paga a taxa).</div>` : ""}
+    ${semPol ? `<div class="aviso">⛽ Você está sem POL. Tudo bem: ao tocar numa ação, você assina de graça e o pedido vai <b>direto para o app ${souCliente ? `do ${NOME.trab.toLowerCase()}` : `do ${NOME.cliente.toLowerCase()}`}</b>, que aceita ou recusa e paga a taxa (centavos).</div>` : ""}
+    <div id="correio"></div>
+    ${!souCliente && t.trabalhador.toLowerCase() === S.endereco.toLowerCase() && t.estado === 1 ? `<div id="rota"></div>` : ""}
     ${S.imp.Encaminhador && !souCliente ? "" : S.imp.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás da outra pessoa</button>` : ""}
-    ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small>${esc(enderecoGuardado)}</small></div><button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
-    ${souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo">📍 Endereço enviado pela conversa: ${esc(enderecoGuardado)}</p>` : ""}
-    ${!souCliente && souParte && (t.modalidade === 0 || t.modalidade === 1) && t.estado === 1 ? `<p class="mudo">📍 O endereço completo chega na 💬 conversa deste trabalho.</p>` : ""}
-    ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? "o trabalhador" : souArbitro ? "as partes" : "o cliente"}</button>` : ""}
+    ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small style="white-space:pre-line">${esc(enderecoGuardado)}</small></div>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}<button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
+    ${souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
+${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}` : ""}
+    ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? `o ${NOME.trab.toLowerCase()}` : souArbitro ? "as partes" : `o ${NOME.cliente.toLowerCase()}`}</button>` : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
     ${codigo ? `<h2>🔑 ${cor ? "Código do destino" : `Código de ${t.modalidade === 1 ? "entrega" : "liberação"}`}</h2><p class="mudo">${cor ? "Mostre ao motorista <b>só quando chegar ao destino</b>. Com ele, o motorista recebe na hora." : "Entregue só a quem recebe, na hora da entrega."}</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
     ${devolucao ? `<details class="cartao"><summary><b>↩️ Código de devolução</b> (só se a mercadoria voltar para você)</summary><p class="mudo">Entregue ao entregador <b>somente</b> quando ele devolver a mercadoria em suas mãos. Com ele, você recebe o pagamento de volta e ele recupera a caução.</p>${qrSvg(devolucao)}<div class="codigo">${esc(devolucao)}</div></details>` : ""}
@@ -1405,7 +1460,129 @@ TELAS.TRABALHO = async () => {
     ${acoes.length === 0 ? `<p class="mudo">Nenhuma ação disponível para você agora.</p>` : ""}
     <button class="btn sec" data-ir="TRABALHOS">Voltar</button>`);
   for (const n of ["acordo", "arbitrar", "desempate"]) $(`#tr-${n}`)?.addEventListener("input", (ev) => ($(`#tr-${n}-v`).textContent = `${ev.target.value}%`));
+  // Ao vivo: pedidos sem gás da outra parte e mudanças do trabalho (sem redesenhar o que a pessoa digita)
+  const foto = fotoTrabalho(t);
+  const vivo = async () => {
+    const agora = await S.escrow.detalhe(id).catch(() => null);
+    if (!agora || S.tela !== "TRABALHO" || String(S.params.id) !== String(id)) return;
+    const digitando = document.activeElement?.matches?.("input,textarea,select");
+    if (fotoTrabalho(agora) !== foto && !digitando) return render();
+    await mostrarCorreio($("#correio"), [agora], cor);
+  };
+  if ($("#rota")) carregarRota(t);
+  vivo().catch(() => {});
+  vigiar("TRABALHO", vivo, 12000);
 };
+
+const fotoTrabalho = (t) => [t.estado, t.trabalhador, t.candidato, t.chegou, t.encerrado, t.pendenteAprovacao].join("|");
+
+/** Rótulos dos pontos de um texto de endereço (corrida: embarque e destino). */
+const rotulosPontos = (texto) => (String(texto || "").includes("Embarque:") ? ["🟢 Embarque", "🏁 Destino"] : ["📍 Local"]);
+
+/** Trabalhador/motorista: os pontos exatos (que chegaram cifrados na conversa) com botões de GPS. */
+async function carregarRota(t) {
+  if (!S.chat) return;
+  try {
+    const msgs = await S.chat.ler(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira);
+    const m = [...msgs].reverse().find((x) => x.de.toLowerCase() === t.cliente.toLowerCase() && coordenadasNoTexto(x.texto).length);
+    const box = $("#rota");
+    if (!box) return;
+    box.innerHTML = m
+      ? `<div class="cartao rota"><h2 style="margin-top:0">🧭 Ir até lá</h2><p class="mudo" style="white-space:pre-line">${esc(m.texto)}</p>${botoesGps(m.texto, rotulosPontos(m.texto))}</div>`
+      : `<p class="mudo">📍 Assim que ${lerCorrida(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao) ? "o passageiro" : "o cliente"} mandar o endereço (cifrado), os botões de GPS aparecem aqui.</p>`;
+  } catch { /* conversa ainda não ativada */ }
+}
+
+// ---------- Pedidos sem gás que chegam pelo correio (correio.js) ----------
+async function pedidosNoCorreio(t) {
+  if (!S.imp?.Encaminhador || t.encerrado || t.estado >= 4) return [];
+  const eu = S.endereco.toLowerCase();
+  const souCliente = t.cliente.toLowerCase() === eu;
+  const souTrab = [t.trabalhador, t.candidato].some((a) => a && a.toLowerCase() === eu);
+  if (!souCliente && !souTrab) return [];
+  const textos = await CO.ler(S.chainId, S.imp.EscrowTrabalho, t.id).catch(() => []);
+  const it = new E.Interface(ABIS.EscrowTrabalho);
+  const out = [];
+  for (const texto of textos) {
+    if (CO.jaResolvido(texto)) continue;
+    try {
+      const d = SG.decodificar(texto);
+      const de = d.pedidos[0].from;
+      if (de.toLowerCase() === eu || d.pedidos.some((p) => p.from.toLowerCase() !== de.toLowerCase())) continue;
+      let aceitar = false;
+      for (const p of d.pedidos) {
+        if (p.to.toLowerCase() !== S.imp.EscrowTrabalho.toLowerCase()) continue;
+        const f = it.parseTransaction({ data: p.data });
+        if (String(f.args[0]) !== String(t.id)) throw new Error("outro trabalho");
+        if (f.name === "aceitar") aceitar = true;
+      }
+      // Só a outra parte (ou, numa vaga aberta, quem quer aceitar) pode pedir aqui
+      const outraParte = souCliente ? [t.trabalhador, t.candidato].some((a) => a && a.toLowerCase() === de.toLowerCase()) : de.toLowerCase() === t.cliente.toLowerCase();
+      if (!outraParte && !(aceitar && souCliente)) continue;
+      const descricoes = d.pedidos.map((p) => SG.descrever(p, S.imp));
+      await SG.conferir(S.provider, S.imp, d);
+      const rep = aceitar ? await S.escrow.reputacao(de).catch(() => null) : null;
+      out.push({ texto, d, de, aceitar, descricoes, rep });
+    } catch { /* inválido, vencido ou já usado: não mostra */ }
+  }
+  return out;
+}
+
+/** Desenha os avisos de pedidos sem gás de vários trabalhos num container (só troca se mudou). */
+async function mostrarCorreio(box, trabalhos, corForcada) {
+  if (!box) return;
+  const partes = [];
+  for (const t of trabalhos) {
+    const itens = await pedidosNoCorreio(t);
+    const cor = corForcada ?? lerCorrida(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao);
+    for (const item of itens) partes.push(cartaoCorreio(t, item, cor));
+  }
+  const html = partes.join("");
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+    ligarSegurar(box);
+    if (html) avisarNovoPedido(partes.length === 1 && html.includes("quer fazer sua corrida") ? "🙋 Um motorista quer fazer sua corrida!" : "📨 Pedido da outra parte esperando você");
+  }
+}
+
+function cartaoCorreio(t, item, cor) {
+  const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
+  const k = E.id(item.texto).slice(2, 14);
+  S.correio ||= new Map();
+  S.correio.set(k, { item, t, cor });
+  const quem = cor ? (souCliente ? "O motorista" : "O passageiro") : souCliente ? "O trabalhador" : "O cliente";
+  if (item.aceitar && souCliente) {
+    const r = item.rep;
+    const precisaAprovar = t.modalidade !== 1 && t.trabalhador === E.ZeroAddress;
+    return `<div class="cartao correio destaque">
+      <h2 style="margin-top:0">🙋 ${cor ? "Um motorista quer fazer sua corrida" : "Alguém quer aceitar seu trabalho"}</h2>
+      <div class="linha"><span>${esc(curto(item.de))}</span><span>${r ? `${estrelasNivel(r.nivel)} <b>${esc(r.nomeNivel)}</b> <small class="mudo">${Number(r.contrapartes)} ${Number(r.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${r.idadeDias} dias</small>` : ""}</span></div>
+      <p>${cor ? "Ele" : "A pessoa"} está <b>sem POL</b> para a taxa da rede. Se você aceitar, o seu app envia o pedido ${cor ? "dele" : "dela"} (você paga a taxa, centavos)${precisaAprovar ? ` e já ${cor ? "aprova ele como seu motorista" : "aprova a pessoa"}` : ""}.${t.kitGas > 0n ? ` O gás que você deixou (${fmt(t.kitGas, 18, 2)} POL) vai para ${cor ? "ele" : "ela"}, para não travar no caminho.` : ""}</p>
+      ${botaoSegurar(cor ? "aceitar este motorista" : "aceitar esta pessoa", `correio-aceitar:${k}`)}
+      <button class="btn sec" data-acao="correio-recusar" data-k="${esc(k)}">Recusar</button></div>`;
+  }
+  return `<div class="cartao correio destaque">
+    <h2 style="margin-top:0">📨 ${quem} está sem POL</h2>
+    <p>Pediu para você enviar por ${cor && souCliente ? "ele" : "ela"}:</p>${item.descricoes.map((x) => `<p>• ${esc(x)}</p>`).join("")}
+    <p class="mudo">Você paga só a taxa da rede (centavos). Nenhum dinheiro seu é usado na ação.</p>
+    ${botaoSegurar("enviar por " + (cor && souCliente ? "ele" : "ela"), `correio-enviar:${k}`)}
+    <button class="btn sec" data-acao="correio-recusar" data-k="${esc(k)}">Agora não</button></div>`;
+}
+
+async function enviarDoCorreio(nome) {
+  const [tipo, k] = nome.split(":");
+  const x = S.correio?.get(k);
+  if (!x) throw new Error("Esse pedido não está mais aqui. Atualize a tela.");
+  const { item, t, cor } = x;
+  await SG.conferir(S.provider, S.imp, item.d);
+  const passos = SG.passosParaEnviar(S.carteira, S.imp, item.d);
+  const atual = await S.escrow.detalhe(t.id);
+  if (tipo === "correio-aceitar" && atual.modalidade !== 1 && atual.trabalhador === E.ZeroAddress) passos.push(passoEscrow(cor ? "Aprovar como seu motorista" : "Aprovar", "decidirCandidato", [BigInt(t.id), true]));
+  await executar(tipo === "correio-aceitar" ? (cor ? "Aceitar motorista" : "Aceitar pessoa") : "Enviar pela outra pessoa", passos);
+  CO.resolver(item.texto);
+  S.correio.delete(k);
+}
 
 // ---------- Conversa ----------
 function participantes(t) {
@@ -1431,7 +1608,7 @@ TELAS.CHAT = async () => {
     <h1>💬 Conversa do trabalho #${esc(t.id)}</h1>
     <p class="mudo">Cifrada de ponta a ponta: só ${quem.length > 2 ? "as partes e os árbitros" : "vocês dois"} conseguem ler. Cada mensagem é uma pequena transação (custa um pouco de POL) e fica guardada para sempre, servindo de registro numa disputa.</p>
     <div class="cartao" id="chat-lista" style="max-height:55vh;overflow:auto">
-      ${msgs.map((m) => `<div class="msg ${m.de.toLowerCase() === S.endereco.toLowerCase() ? "minha" : ""}"><small class="mudo">${esc(papelDe(t, m.de))}${m.em ? " · " + new Date(m.em * 1000).toLocaleString("pt-BR") : ""}</small><p>${esc(m.texto)}</p></div>`).join("") || `<p class="mudo">Nenhuma mensagem ainda. Diga olá! 👋</p>`}
+      ${msgs.map((m) => `<div class="msg ${m.de.toLowerCase() === S.endereco.toLowerCase() ? "minha" : ""}"><small class="mudo">${esc(papelDe(t, m.de))}${m.em ? " · " + new Date(m.em * 1000).toLocaleString("pt-BR") : ""}</small><p>${esc(m.texto)}</p>${botoesGps(m.texto, rotulosPontos(m.texto))}</div>`).join("") || `<p class="mudo">Nenhuma mensagem ainda. Diga olá! 👋</p>`}
     </div>
     <label for="chat-txt">Mensagem</label><textarea id="chat-txt" maxlength="${MAX_CARACTERES}" placeholder="Ex.: Estou chegando em 10 minutos"></textarea>
     <button class="btn prim" data-acao="chat-enviar">Enviar mensagem</button>
@@ -1536,6 +1713,29 @@ $("#btn-bloquear").addEventListener("click", bloquear);
 
 async function acao(nome, el) {
   switch (nome) {
+    case "cor-mapa-de":
+      return marcarPontoCorrida("de");
+    case "cor-mapa-para":
+      return marcarPontoCorrida("para");
+    case "tn-mapa": {
+      const p = await escolherPonto({ titulo: "📍 Onde é o serviço?", inicial: S.params.ponto });
+      if (!p) return;
+      S.params.ponto = p;
+      const end = $("#tn-endereco");
+      if (end && !end.value.trim()) end.value = [p.endereco, p.complemento].filter(Boolean).join(" · ").slice(0, 180);
+      const reg = $("#tn-regiao");
+      if (reg && !reg.value.trim() && p.bairro) reg.value = p.bairro.slice(0, 36);
+      const info = $("#tn-ponto");
+      if (info) info.textContent = `📍 Ponto marcado: ${fmtCoord(p.lat, p.lon)}. Confira o número e o complemento no campo acima.`;
+      return;
+    }
+    case "correio-recusar": {
+      const x = S.correio?.get(el.dataset.k);
+      if (x) CO.resolver(x.item.texto);
+      el.closest(".correio")?.remove();
+      toast(x?.item.aceitar ? "Recusado. A corrida continua aberta para outros." : "Ok, não vou mostrar de novo.");
+      return;
+    }
     case "fechar-modal":
       S.pinRecente = null;
       fecharModal();
@@ -1802,6 +2002,7 @@ async function acao(nome, el) {
 
 // Ações confirmadas por "segurar"
 async function confirmar(nome) {
+  if (nome.startsWith("correio-")) return enviarDoCorreio(nome);
   switch (nome) {
     case "anotei":
       return ir("CONFIRMAR_FRASE");
@@ -1904,7 +2105,9 @@ async function operarCofre() {
 async function criarTrabalho() {
   const m = Number(S.params.modalidade ?? 0);
   const regiao = ($("#tn-regiao")?.value || "").trim();
-  const enderecoCompleto = ($("#tn-endereco")?.value || "").trim();
+  let enderecoCompleto = ($("#tn-endereco")?.value || "").trim();
+  const pt = S.params.ponto;
+  if (pt && !coordenadasNoTexto(enderecoCompleto).length) enderecoCompleto = `${enderecoCompleto || pt.endereco}\n📍 ${fmtCoord(pt.lat, pt.lon)}`;
   if ((m === 0 || m === 1) && regiao.length < 3) throw new Error("Informe o bairro e a cidade");
   if ((m === 0 || m === 1) && enderecoCompleto.length < 8) throw new Error("Informe o endereço completo: sem ele a pessoa não sabe aonde ir");
   const valor = lerValor($("#tn-valor").value, 18);

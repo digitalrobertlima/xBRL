@@ -6,8 +6,10 @@
 //
 // Mensagens (com { brls: 1, ... }), só com a janela-mãe e a origem que respondeu ao "olá":
 //   filho → mãe  { tipo: "rede", id, url, method, headers, corpo }
-//   mãe → filho  { tipo: "rede-resposta", id, status, conteudo, corpo } | { ..., erro }
+//   mãe → filho  { tipo: "rede-resposta", id, status, conteudo, corpo, b64? } | { ..., erro }
+//                (b64 = corpo em base64: imagens do mapa)
 //   filho → mãe  { tipo: "copiar", texto }   (área de transferência do celular, apagada sozinha)
+//   filho → mãe  { tipo: "gps", lat, lon, app }   (abrir o ponto no app de GPS: só com toque da pessoa)
 // "?tor=pai": janela dentro do próprio BRLS (o comprovante) usa a rede da janela de cima.
 // Este arquivo tem de ser o PRIMEIRO import de cada página.
 // =====================================================================
@@ -41,7 +43,9 @@ function instalarPonte() {
       if (d.erro) return p.falha(new TypeError(String(d.erro).slice(0, 200)));
       const st = Number(d.status) || 502;
       const semCorpo = st === 204 || st === 304;
-      p.ok(new Response(semCorpo ? null : String(d.corpo ?? ""), { status: st >= 200 && st <= 599 ? st : 502, headers: { "content-type": String(d.conteudo || "application/json") } }));
+      // Imagens (mapa) chegam em base64 (d.b64): a mensagem só leva texto.
+      const corpo = semCorpo ? null : d.b64 ? Uint8Array.from(atob(String(d.corpo || "")), (c) => c.charCodeAt(0)) : String(d.corpo ?? "");
+      p.ok(new Response(corpo, { status: st >= 200 && st <= 599 ? st : 502, headers: { "content-type": String(d.conteudo || "application/json") } }));
     }
   });
   // "*" só no olá: ainda não sabemos a origem da mãe, e o olá não leva nada.

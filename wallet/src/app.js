@@ -2,7 +2,7 @@
 // BRLS — Carteira Nativa (PWA) — máquina de estados travada
 // - Só transições declaradas em TRANSICOES são possíveis (botão "voltar" do aparelho não fura o bloqueio).
 // - A frase/chave só existe na memória enquanto a carteira está desbloqueada (auto-bloqueio em 5 min).
-// - Ações que movem dinheiro exigem "segurar para confirmar"; desbloqueio exige "deslizar" + PIN.
+// - Ações que movem dinheiro exigem "deslizar para confirmar"; desbloqueio exige "deslizar" + PIN.
 // - Chegada ao local é comprovada por código/QR (palavras), nunca por GPS (falsificável).
 // =====================================================================
 import { REDE_PELA_PONTE } from "./rede-ponte.js"; // primeiro: no app Android, a rede vem pela Caixa Forte (Tor)
@@ -177,52 +177,80 @@ function mostrarErro(e) {
   toast("⚠️ " + traduzirErro(e));
 }
 
-/** Botões "segure para confirmar": dispara após 1,2 s pressionado (toque, mouse ou teclado). */
+/** Botões "deslize para confirmar": arraste a bolinha até o fim (toque, mouse ou setas do teclado).
+ *  Não depende de segurar: o menu de contexto de tablets/Androids não aparece porque não há pressão parada. */
 function ligarSegurar(raiz) {
   for (const b of $$(".segurar", raiz)) {
     if (b.dataset.ligado) continue;
     b.dataset.ligado = "1";
-    let t0 = 0;
-    let raf = 0;
-    const DUR = 1200;
-    const parar = () => {
-      cancelAnimationFrame(raf);
-      t0 = 0;
-      b.style.setProperty("--p", "0%");
+    const rotulo = b.textContent.trim().replace(/^[✋👉]\s*/u, "").replace(/^Segure para/i, "Deslize para");
+    b.innerHTML = `<span class="fio" aria-hidden="true">»</span><i>${esc(rotulo)}</i>`;
+    b.setAttribute("role", "slider");
+    b.setAttribute("aria-label", rotulo);
+    b.setAttribute("aria-valuemin", "0");
+    b.setAttribute("aria-valuemax", "100");
+    b.setAttribute("aria-valuenow", "0");
+    const fio = b.querySelector(".fio");
+    let x0 = 0;
+    let max = 0;
+    let arrastando = false;
+    const pos = (p) => {
+      const q = Math.max(0, Math.min(1, p));
+      b.style.setProperty("--p", `${q * 100}%`);
+      fio.style.transform = `translateX(${q * max}px)`;
+      b.setAttribute("aria-valuenow", String(Math.round(q * 100)));
+      return q;
     };
-    const passo = () => {
-      const p = Math.min(1, (performance.now() - t0) / DUR);
-      b.style.setProperty("--p", `${p * 100}%`);
-      if (p >= 1) {
-        parar();
-        navigator.vibrate?.(40);
-        b.dispatchEvent(new CustomEvent("confirmado", { bubbles: true }));
-      } else raf = requestAnimationFrame(passo);
+    const medir = () => { max = Math.max(1, b.clientWidth - fio.offsetWidth - 12); };
+    const concluir = () => {
+      navigator.vibrate?.(40);
+      b.dispatchEvent(new CustomEvent("confirmado", { bubbles: true }));
+      setTimeout(() => { fio.style.transition = "transform .2s"; pos(0); }, 120); // volta ao início: dá para tentar de novo se der erro
     };
-    const iniciar = (ev) => {
-      if (b.disabled || t0) return;
+    const soltar = () => {
+      if (!arrastando) return;
+      arrastando = false;
+      b.classList.remove("arrastando");
+      const p = parseFloat(b.style.getPropertyValue("--p")) / 100;
+      fio.style.transition = "transform .2s";
+      if (p >= 0.88) { pos(1); concluir(); } else pos(0);
+    };
+    fio.addEventListener("pointerdown", (ev) => {
+      if (b.disabled) return;
       ev.preventDefault();
-      t0 = performance.now();
-      raf = requestAnimationFrame(passo);
-    };
-    b.addEventListener("pointerdown", iniciar);
-    b.addEventListener("pointerup", parar);
-    b.addEventListener("pointerleave", parar);
-    b.addEventListener("pointercancel", parar);
-    // Segurar não pode abrir o menu do aparelho nem selecionar texto (tablets e alguns Androids fazem isso)
-    b.addEventListener("contextmenu", (ev) => ev.preventDefault());
-    b.addEventListener("selectstart", (ev) => ev.preventDefault());
-    b.addEventListener("touchstart", (ev) => { if (ev.cancelable) ev.preventDefault(); if (!t0 && !b.disabled) { t0 = performance.now(); raf = requestAnimationFrame(passo); } }, { passive: false });
-    b.addEventListener("touchend", parar);
-    b.addEventListener("touchcancel", parar);
-    b.addEventListener("keydown", (ev) => (ev.key === " " || ev.key === "Enter") && !ev.repeat && iniciar(ev));
-    b.addEventListener("keyup", (ev) => (ev.key === " " || ev.key === "Enter") && parar());
+      medir();
+      fio.style.transition = "none";
+      x0 = ev.clientX;
+      arrastando = true;
+      b.classList.add("arrastando");
+      try { fio.setPointerCapture(ev.pointerId); } catch { /* sem captura */ }
+    });
+    fio.addEventListener("pointermove", (ev) => { if (arrastando) pos((ev.clientX - x0) / max); });
+    fio.addEventListener("pointerup", soltar);
+    fio.addEventListener("pointercancel", soltar);
+    fio.addEventListener("lostpointercapture", soltar);
+    // Nada de menu do aparelho nem seleção de texto
+    for (const el of [b, fio]) {
+      el.addEventListener("contextmenu", (ev) => ev.preventDefault());
+      el.addEventListener("selectstart", (ev) => ev.preventDefault());
+      el.addEventListener("dragstart", (ev) => ev.preventDefault());
+    }
+    // Teclado: setas empurram a bolinha; chegando ao fim, confirma
+    b.addEventListener("keydown", (ev) => {
+      if (b.disabled || !["ArrowRight", "ArrowLeft", "Home"].includes(ev.key)) return;
+      ev.preventDefault();
+      medir();
+      const p = parseFloat(b.style.getPropertyValue("--p") || "0") / 100;
+      if (ev.key === "ArrowLeft" || ev.key === "Home") return pos(ev.key === "Home" ? 0 : p - 0.25);
+      const q = pos(p + 0.25);
+      if (q >= 1) concluir();
+    });
     b.addEventListener("click", (ev) => ev.preventDefault());
   }
 }
 
 function botaoSegurar(texto, acao, extra = "") {
-  return `<button class="btn prim segurar" data-confirmar="${esc(acao)}" ${extra}><i>✋ Segure para ${esc(texto)}</i></button>`;
+  return `<button class="btn prim segurar" data-confirmar="${esc(acao)}" ${extra}><i>👉 Deslize para ${esc(texto)}</i></button>`;
 }
 
 // ---------- Números em reais ----------
@@ -3023,7 +3051,7 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
     ${acoes.includes("desempatar") ? `<h2>⚖️ Desempate do criador</h2><label for="tr-desempate">Ao trabalhador: <b id="tr-desempate-v">${Math.round((lim[0] + lim[1]) / 200)}%</b> (entre ${lim[0] / 100}% e ${lim[1] / 100}%)</label><input type="range" id="tr-desempate" min="${Math.ceil(lim[0] / 100)}" max="${Math.floor(lim[1] / 100)}" value="${Math.round((lim[0] + lim[1]) / 200)}">${botaoSegurar("desempatar", "tr-desempatar")}` : ""}
     ${acoes.includes("proporAcordo") ? `<label for="tr-acordo">Proposta: quanto do restante vai ao trabalhador? <b id="tr-acordo-v">50%</b></label><input type="range" id="tr-acordo" min="0" max="100" value="50">${botaoSegurar("propor acordo", "tr-acordo")}` : ""}
     ${acoes.includes("avaliar") ? `<h2>Avalie a outra parte</h2><div class="estrelas" role="group" aria-label="Estrelas">${[1, 2, 3, 4, 5].map((n) => `<button data-estrela="${n}" aria-label="${n} estrelas">★</button>`).join("")}</div>${botaoSegurar("enviar avaliação", "tr-avaliar")}` : ""}
-    ${acoes.filter((a) => ROTULOS[a]).map((a) => (["abrirDisputa", "desistir", "cancelar", "recusarCandidato"].includes(a) ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>✋ Segure para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
+    ${acoes.filter((a) => ROTULOS[a]).map((a) => (["abrirDisputa", "desistir", "cancelar", "recusarCandidato"].includes(a) ? `<button class="btn perigo segurar" data-confirmar="tr-${a}"><i>👉 Deslize para ${esc(ROTULOS[a])}</i></button>` : botaoSegurar(ROTULOS[a], `tr-${a}`))).join("")}
     ${acoes.length === 0 ? `<p class="mudo">Nenhuma ação disponível para você agora.</p>` : ""}
     <button class="btn sec" data-ir="TRABALHOS">Voltar</button>`);
   for (const n of ["acordo", "arbitrar", "desempate"]) $(`#tr-${n}`)?.addEventListener("input", (ev) => ($(`#tr-${n}-v`).textContent = `${ev.target.value}%`));
@@ -3395,7 +3423,7 @@ TELAS.AJUSTES = async () => {
     </div>
     ${S.externa ? "" : `<h2>Zona de perigo</h2>
     <label for="aj-apagar">Para apagar a carteira deste aparelho, digite APAGAR</label><input id="aj-apagar" autocomplete="off">
-    <button class="btn perigo segurar" data-confirmar="apagar"><i>✋ Segure para apagar deste aparelho</i></button>
+    <button class="btn perigo segurar" data-confirmar="apagar"><i>👉 Deslize para apagar deste aparelho</i></button>
     <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as suas palavras.</p>`}`);
   $("#aj-rede").addEventListener("change", async (ev) => {
     const id = Number(ev.target.value);
@@ -3693,7 +3721,7 @@ async function acao(nome, el) {
     }
     case "esqueci":
       modal(`<h2>Restaurar com as palavras?</h2><p>Isso apaga a carteira cifrada deste aparelho. Seu dinheiro fica intacto e volta com as suas palavras (12 ou 24).</p>
-        <button class="btn perigo segurar" data-confirmar="esqueci"><i>✋ Segure para continuar</i></button><button class="btn sec" data-acao="fechar-modal">Cancelar</button>`);
+        <button class="btn perigo segurar" data-confirmar="esqueci"><i>👉 Deslize para continuar</i></button><button class="btn sec" data-acao="fechar-modal">Cancelar</button>`);
       return;
     case "biometria": {
       const frase = await K.abrirComBiometria();

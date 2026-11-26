@@ -245,7 +245,7 @@ O protocolo não toca em reais nem em Pix: é um acordo entre pessoas, com o BRL
 - Chave BIP-39 de 12 ou 24 palavras (inglês ou português), caminho `m/44'/60'/0'/0/0`, cifrada com
   AES-256-GCM; chave de dados protegida por PIN (PBKDF2-SHA256, 600 mil iterações) e opcionalmente biometria
   (WebAuthn PRF). Bloqueio automático em 5 min.
-- Mover dinheiro exige **segurar para confirmar**; aprovações de token sempre do valor exato.
+- Mover dinheiro exige **deslizar para confirmar**; aprovações de token sempre do valor exato.
 - Corrida e pedidos nunca se perdem: faixa "em andamento", volta direto à corrida, tela acesa, avisos com o
   app em segundo plano (no APK, um "plantão" visível mantém o app vivo).
 

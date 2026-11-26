@@ -47,7 +47,7 @@ Documento vivo: o que já está pronto, o que falta antes de divulgar em grande 
      pode ter acréscimo, ex.: Queijo + R$ 1,00) — **Adicionais** (opcional, ex.: Catupiry + R$ 2,00) — foto.
    - *Caldo de cana 500 ml* — preço — **Sabores**: Com limão, Sem limão.
    - Entrega: "Retirar ou combinar" ou "O vendedor entrega" (com taxa de entrega). Bairro e cidade.
-   - **Segure para publicar.**
+   - **Deslize para publicar.**
 3. (Opcional) **🗂️ Meus anúncios e loja → 🏪 Criar minha loja**: nome, horário, foto, endereço de retirada e
    **entregador da rede** (carro, moto ou bicicleta) com a taxa de entrega.
 4. Em **Meus anúncios e loja**, toque em **🔔 Receber pedidos com aviso**. No APK, o celular mostra o aviso fixo

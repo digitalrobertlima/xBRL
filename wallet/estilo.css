@@ -133,7 +133,8 @@ p { margin: 6px 0; }
 .btn.sec { background: transparent; color: var(--papel); border: 1px solid var(--gravura); }
 .btn.perigo { background: transparent; color: #FFB4A2; border: 1px solid var(--urucum); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.segurar { position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; }
+.segurar { position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.segurar * { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; pointer-events: none; }
 .segurar::before { content: ""; position: absolute; inset: 0; width: var(--p, 0%); background: rgba(6, 23, 16, .28); transition: width .08s linear; }
 .segurar > i { position: relative; font-style: normal; }
 
@@ -337,3 +338,22 @@ fieldset.escolhas { border: 1px solid rgba(62, 125, 102, .55); border-radius: va
 fieldset.escolhas legend { padding: 0 6px; font-weight: 600; }
 fieldset.escolhas label.check { margin: 8px 0; align-items: center; }
 .sacola-atalho { grid-template-columns: 1fr auto; gap: 8px; } .sacola-atalho .btn { margin: 6px 0; }
+
+/* ---------- Restaurar: um quadrinho por palavra ---------- */
+.quantas { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.palavras-grade { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 14px 0 8px; counter-reset: none; }
+@media (min-width: 560px) { .palavras-grade { grid-template-columns: repeat(3, 1fr); } }
+.palavra { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: var(--raio); border: 1px solid rgba(62, 125, 102, .55); background: var(--mata-funda); margin: 0; }
+.palavra span { min-width: 1.6em; text-align: right; font-family: var(--serifa); font-variant-numeric: tabular-nums; color: var(--mudo); }
+.palavra input { border: 0; background: transparent; margin: 0; padding: 12px 4px; min-width: 0; flex: 1; font-size: 17px; }
+.palavra input:focus { outline: none; }
+.palavra:focus-within { border-color: var(--ipe); box-shadow: 0 0 0 2px rgba(242, 184, 7, .35); }
+.palavra.ok { border-color: var(--gravura-viva); }
+.palavra.erro { border-color: var(--urucum); }
+.sugestoes { display: flex; flex-wrap: wrap; gap: 6px; min-height: 8px; }
+.sugestoes button { padding: 8px 12px; border-radius: 999px; border: 1px solid var(--gravura); background: var(--folha); color: var(--papel); font: inherit; cursor: pointer; }
+
+/* ---------- Disponível + Máximo embaixo dos campos de valor ---------- */
+.disponivel { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 8px; font-size: 15px; }
+.disponivel .btn.mini { width: auto; min-height: 0; padding: 8px 14px; margin: 0; font-size: 15px; flex: none; }
+.disponivel .btn.mini:disabled { opacity: .45; }

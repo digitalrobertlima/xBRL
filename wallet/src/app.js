@@ -209,6 +209,12 @@ function ligarSegurar(raiz) {
     b.addEventListener("pointerup", parar);
     b.addEventListener("pointerleave", parar);
     b.addEventListener("pointercancel", parar);
+    // Segurar não pode abrir o menu do aparelho nem selecionar texto (tablets e alguns Androids fazem isso)
+    b.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    b.addEventListener("selectstart", (ev) => ev.preventDefault());
+    b.addEventListener("touchstart", (ev) => { if (ev.cancelable) ev.preventDefault(); if (!t0 && !b.disabled) { t0 = performance.now(); raf = requestAnimationFrame(passo); } }, { passive: false });
+    b.addEventListener("touchend", parar);
+    b.addEventListener("touchcancel", parar);
     b.addEventListener("keydown", (ev) => (ev.key === " " || ev.key === "Enter") && !ev.repeat && iniciar(ev));
     b.addEventListener("keyup", (ev) => (ev.key === " " || ev.key === "Enter") && parar());
     b.addEventListener("click", (ev) => ev.preventDefault());
@@ -659,6 +665,54 @@ async function telaAcesa(liga) {
   } catch { /* aparelho sem suporte: segue normal */ }
 }
 
+// ---------- Saldo disponível + botão Máximo (já descontando as taxas) ----------
+/** Valor para o campo, sem arredondar para cima (nunca passa do que dá para enviar). */
+function paraCampo(v, dec = 18, casas = 6) {
+  const [i, f = ""] = E.formatUnits(v < 0n ? 0n : v, dec).split(".");
+  const fr = f.slice(0, Math.min(casas, dec)).replace(/0+$/, "");
+  return fr ? `${i},${fr}` : i;
+}
+/** Custo estimado do gás (com folga de 50%) para uma operação de `gas` unidades. */
+async function custoGas(gas) {
+  const f = await S.provider.getFeeData();
+  const preco = f.maxFeePerGas || f.gasPrice || E.parseUnits("100", "gwei");
+  return (preco * BigInt(gas) * 3n) / 2n;
+}
+/**
+ * Mostra embaixo do campo "Disponível: …" e um botão Máximo.
+ * calcular() → { max (bigint), decimais, simbolo, texto?, nota? } — `max` já sem as taxas.
+ */
+function ligarMaximo(sel, calcular) {
+  const campo = $(sel);
+  if (!campo || campo.dataset.maximo) return;
+  campo.dataset.maximo = "1";
+  const linha = document.createElement("p");
+  linha.className = "disponivel";
+  linha.innerHTML = `<span class="mudo">Disponível: …</span><button type="button" class="btn sec mini">Máximo</button>`;
+  campo.insertAdjacentElement("afterend", linha);
+  const span = linha.querySelector("span");
+  const botao = linha.querySelector("button");
+  const atualizar = async () => {
+    try {
+      const r = await calcular();
+      span.innerHTML = r.texto || `Disponível: <b>${fmt(r.max, r.decimais, 4)} ${esc(r.simbolo)}</b>`;
+      botao.disabled = !(r.max > 0n);
+    } catch { span.textContent = ""; }
+  };
+  botao.addEventListener("click", async () => {
+    try {
+      const r = await calcular();
+      if (!(r.max > 0n)) return toast(r.semSaldo || "Sem saldo para enviar");
+      campo.value = paraCampo(r.max, r.decimais);
+      campo.dispatchEvent(new Event("input", { bubbles: true }));
+      if (r.nota) toast(r.nota);
+    } catch (e) { mostrarErro(e); }
+  });
+  atualizar();
+  return atualizar;
+}
+const saldoBrls = async () => ({ max: await c("xBRL").balanceOf(S.endereco), decimais: 18, simbolo: "BRLS" });
+
 // ----------------------------------------------------------------------------
 // Componentes: PIN e deslizar
 // ----------------------------------------------------------------------------
@@ -779,12 +833,65 @@ TELAS.CONFIRMAR_FRASE = () => {
     <button class="btn sec" data-acao="rever-frase">Ver as palavras de novo</button>`);
 };
 
-TELAS.RESTAURAR = () => tela(`
-  <h1>Restaurar carteira</h1><p class="mudo">Digite as suas palavras (12 ou 24), na ordem, separadas por espaço. Em português ou em inglês: o app reconhece sozinho.</p>
-  <textarea id="frase" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Palavras de recuperação"></textarea>
+// Restaurar: um quadrinho numerado por palavra (12, 15, 18, 21 ou 24). Colar a frase inteira espalha sozinho.
+TELAS.RESTAURAR = () => {
+  S.restN ||= 12;
+  S.restPalavras ||= [];
+  const n = S.restN;
+  tela(`
+  <h1>Restaurar carteira</h1>
+  <p class="mudo">Digite cada palavra no seu quadrinho, na ordem. Em português ou em inglês: o app reconhece sozinho. Colou a frase inteira num quadrinho? Ela se espalha sozinha.</p>
+  <p class="rotulo-ponto">Quantas palavras tem a sua frase?</p>
+  <div class="seg quantas" role="group" aria-label="Quantas palavras">${K.QUANTIDADES.map((q) => `<button data-acao="rest-n-${q}" aria-pressed="${q === n}">${q}</button>`).join("")}</div>
+  <div class="palavras-grade" id="grade">${Array.from({ length: n }, (_, i) => `<label class="palavra"><span>${i + 1}</span><input id="pw-${i}" data-i="${i}" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="${i === n - 1 ? "done" : "next"}" aria-label="Palavra ${i + 1}" value="${esc(S.restPalavras[i] || "")}"></label>`).join("")}</div>
+  <div id="sug" class="sugestoes" aria-live="polite"></div>
   <div id="msg" role="alert"></div>
   <button class="btn prim" data-acao="restaurar-ok">Continuar</button>
+  <button class="btn sec" data-acao="rest-limpar">Limpar tudo</button>
   <button class="btn sec" data-acao="voltar-boas-vindas">Voltar</button>`);
+  const campos = $$("#grade input");
+  const marcar = (c) => { const v = c.value.trim(); c.parentElement.classList.toggle("ok", !!v && K.palavraExiste(v)); c.parentElement.classList.toggle("erro", !!v && !K.palavraExiste(v)); };
+  const guardar = () => { S.restPalavras = campos.map((c) => c.value.trim()); };
+  const sugerir = (c) => {
+    const box = $("#sug");
+    const l = K.sugestoes(c.value);
+    box.innerHTML = l.length && !K.palavraExiste(c.value) ? l.map((w) => `<button type="button" data-sug="${esc(w)}" data-i="${c.dataset.i}">${esc(w)}</button>`).join("") : "";
+  };
+  const proximo = (i) => { const c = campos[i + 1]; if (c) c.focus(); else $("#sug").innerHTML = ""; };
+  campos.forEach((c, i) => {
+    c.addEventListener("input", () => {
+      const partes = K.normalizarFrase(c.value).split(" ").filter(Boolean);
+      if (partes.length > 1) {
+        // Frase colada (ou palavras com espaço): espalha a partir daqui; se for uma frase inteira de outro tamanho, troca o tamanho
+        if (i === 0 && partes.length !== n && K.QUANTIDADES.includes(partes.length)) { S.restN = partes.length; S.restPalavras = partes; return render(); }
+        partes.forEach((w, k) => { if (campos[i + k]) { campos[i + k].value = w; marcar(campos[i + k]); } });
+        guardar();
+        return proximo(Math.min(n - 2, i + partes.length - 1));
+      }
+      if (/\s$/.test(c.value) && c.value.trim()) { c.value = c.value.trim(); marcar(c); guardar(); return proximo(i); }
+      guardar();
+      sugerir(c);
+    });
+    c.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); marcar(c); if (i === n - 1) $('[data-acao="restaurar-ok"]').click(); else proximo(i); }
+      if (ev.key === "Backspace" && !c.value && i > 0) { ev.preventDefault(); campos[i - 1].focus(); }
+    });
+    c.addEventListener("focus", () => sugerir(c));
+    c.addEventListener("blur", () => marcar(c));
+    if (c.value) marcar(c);
+  });
+  $("#sug").addEventListener("pointerdown", (ev) => {
+    const b = ev.target.closest("[data-sug]");
+    if (!b) return;
+    ev.preventDefault();
+    const c = campos[Number(b.dataset.i)];
+    c.value = b.dataset.sug;
+    marcar(c);
+    guardar();
+    proximo(Number(b.dataset.i));
+  });
+  (campos.find((c) => !c.value) || campos[0]).focus();
+};
 
 TELAS.DEFINIR_PIN = () =>
   tecladoPin("Crie um PIN", `${SEGURANCA.pinDigitos} dígitos para abrir a carteira neste aparelho. Evite datas e sequências.`, async (pin) => {
@@ -954,8 +1061,20 @@ TELAS.ENVIAR = () => {
       out.textContent = "";
     }
   };
+  const maximo = ligarMaximo("#env-valor", async () => {
+    const sel = $("#env-token").value;
+    const pol = await S.provider.getBalance(S.endereco);
+    if (sel === "nativo") {
+      const max = pol - (await custoGas(21_000));
+      return { max, decimais: 18, simbolo: S.rede.nativo.simbolo, nota: "Já descontei a taxa da rede." };
+    }
+    const t = S.tokensInfo[Number(sel)];
+    const bal = await new E.Contract(t.endereco, ABIS.xBRL, S.provider).balanceOf(S.endereco);
+    const falta = pol < (await custoGas(80_000));
+    return { max: bal, decimais: t.decimais, simbolo: t.simbolo, texto: `Disponível: <b>${fmt(bal, t.decimais, 4)} ${esc(t.simbolo)}</b>${falta ? ` · <span style="color:var(--pequi)">falta POL para a taxa da rede</span>` : ""}`, nota: falta ? "Atenção: falta POL para a taxa da rede (veja o Tanque)." : "" };
+  });
   $("#env-valor").addEventListener("input", atualizar);
-  $("#env-token").addEventListener("change", atualizar);
+  $("#env-token").addEventListener("change", () => { $("#env-valor").value = ""; atualizar(); maximo?.(); });
   $("#env-para").addEventListener("change", atualizar);
 };
 
@@ -1015,8 +1134,20 @@ TELAS.RESERVA = async () => {
       out.textContent = "";
     }
   };
+  const maximo = ligarMaximo("#res-valor", async () => {
+    const t = lastros[Number($("#res-lastro").value)];
+    if (modo === "emitir") {
+      const [bal, hoje] = await Promise.all([new E.Contract(t.endereco, ABIS.xBRL, S.provider).balanceOf(S.endereco), r.emissaoDisponivelNaJanela(t.endereco)]);
+      const hojeLastro = t.decimais === 18 ? hoje : hoje / 10n ** BigInt(18 - t.decimais);
+      const max = bal < hojeLastro ? bal : hojeLastro;
+      return { max, decimais: t.decimais, simbolo: t.simbolo, texto: `Disponível: <b>${fmt(bal, t.decimais, 4)} ${esc(t.simbolo)}</b>${hojeLastro < bal ? ` · limite de hoje ${fmt(hojeLastro, t.decimais, 2)}` : ""}`, nota: "A taxa sai do BRLS que você recebe." };
+    }
+    const bal = await c("xBRL").balanceOf(S.endereco);
+    const max = Number(fase) === 2 && janela < bal ? janela : bal;
+    return { max, decimais: 18, simbolo: "BRLS", nota: "A taxa sai do valor que você recebe." };
+  });
   $("#res-valor").addEventListener("input", cotar);
-  $("#res-lastro").addEventListener("change", cotar);
+  $("#res-lastro").addEventListener("change", () => { cotar(); maximo?.(); });
 };
 
 TELAS.TANQUE = async () => {
@@ -1203,6 +1334,14 @@ TELAS.COFRE = async () => {
       <button class="btn sec" data-acao="cofre-risco">🔎 Procurar posições em risco</button>
       <div id="cf-risco"></div>
     </details>`);
+  ligarMaximo("#cf-valor", async () => {
+    if (modo === "depositar") return { max: saldoTok, decimais: x.decimais, simbolo: x.simbolo };
+    if (modo === "emitir") return { max: x.podeEmitir, decimais: 18, simbolo: "BRLS", texto: `Pode emitir: <b>${fmt(x.podeEmitir)} BRLS</b> (a taxa de 0,5% entra na dívida; deixe folga)` };
+    if (modo === "quitar") { const m = x.pos.divida < saldoX ? x.pos.divida : saldoX; return { max: m, decimais: 18, simbolo: "BRLS", texto: `Dívida: <b>${fmt(x.pos.divida)}</b> · você tem ${fmt(saldoX)} BRLS` }; }
+    return x.pos.divida === 0n
+      ? { max: x.pos.colateral, decimais: x.decimais, simbolo: x.simbolo }
+      : { max: 0n, decimais: x.decimais, simbolo: x.simbolo, texto: `Depositado: <b>${fmt(x.pos.colateral, x.decimais, 4)} ${esc(x.simbolo)}</b> · com dívida, retire só uma parte (a saúde precisa ficar acima de ${pct(x.a.crEmissaoBps)})`, semSaldo: "Pague a dívida para retirar tudo" };
+  });
 };
 
 /** Lista contas com dívida no ativo atual e destaca as liquidáveis. */
@@ -1548,6 +1687,17 @@ function desenharAcaoAnuncio(a) {
       <p class="mudo">🔒 O vendedor só recebe quando você der o <b>código de entrega</b>, na hora em que estiver com o produto na mão. Nunca passe o código antes.</p></div>`;
   }
   ligarSegurar(box);
+  ligarMaximo("#an-valor", saldoBrls);
+  if (a.cat === "pix" && a.pix.lado === "compro") {
+    // Vender BRLS por Pix: o máximo em reais já desconta o prêmio do caixa (você trava reais × (1 + prêmio))
+    ligarMaximo("#pix-reais", async () => {
+      const b = await c("xBRL").balanceOf(S.endereco);
+      let max = (b * 10000n) / BigInt(Math.round(10000 * (1 + a.pix.premio / 100)));
+      const teto = lerValor(a.pix.max);
+      if (max > teto) max = teto;
+      return { max, decimais: 18, simbolo: "reais", texto: `Você tem <b>${fmt(b)} BRLS</b> · dá para receber até R$ ${fmt(max)}`, nota: `Já descontei o prêmio de ${String(a.pix.premio).replace(".", ",")}%.` };
+    });
+  }
 }
 
 async function comprarAnuncio(servico) {
@@ -2074,6 +2224,7 @@ TELAS.CORRIDA = async () => {
     $(`#${id}`)?.addEventListener("input", (ev) => (r[k] = ev.target.value));
   }
   $("#cor-valor").addEventListener("input", (ev) => { r.valor = ev.target.value; r.valorEditado = true; });
+  ligarMaximo("#cor-valor", saldoBrls);
   $("#cor-pessoas").addEventListener("change", (ev) => (r.pessoas = Number(ev.target.value)));
   $("#cor-validade").addEventListener("change", (ev) => (r.validade = Number(ev.target.value)));
   $("#cor-fav")?.addEventListener("change", (ev) => (r.favorito = ev.target.value));
@@ -2637,6 +2788,13 @@ TELAS.TRABALHO_NOVO = () => {
     </details>` : ""}
     ${botaoSegurar("travar o pagamento", "criar-trabalho")}
     <p class="mudo">O valor fica travado no contrato, não com a gente. Taxa de 0,1% só quando o trabalhador recebe.</p>`);
+  ligarMaximo("#tn-valor", async () => ({ ...(await saldoBrls()), nota: "A taxa de 0,1% sai do pagamento do trabalhador, não do seu saldo." }));
+  ligarMaximo("#tn-kit", async () => {
+    const pol = await S.provider.getBalance(S.endereco);
+    let max = pol - (await custoGas(900_000));
+    if (max > E.parseEther("5")) max = E.parseEther("5");
+    return { max, decimais: 18, simbolo: "POL", texto: `Você tem <b>${fmt(pol, 18, 3)} POL</b> (máx. 5 para o gás do trabalhador)`, nota: "Já descontei a taxa da rede." };
+  });
 };
 
 TELAS.TRABALHO = async () => {
@@ -2762,6 +2920,7 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
   const perfilMot = cor && mot ? vit()?.motorista(mot) : null;
   if (perfilMot?.fotos?.length) vit().fotos(perfilMot).then((u) => { const b = $("#cor-foto-mot"); if (b && u[0]) b.innerHTML = `<img src="${u[0]}" alt="Foto do motorista">`; }).catch(() => {});
   if ($("#rota")) carregarRota(t);
+  if ($("#cor-gorjeta-v")) ligarMaximo("#cor-gorjeta-v", saldoBrls);
   vivo().catch(() => {});
   vigiar("TRABALHO", vivo, 12000);
 };
@@ -3247,14 +3406,30 @@ async function acao(nome, el) {
       }
       return ir("DEFINIR_PIN");
     }
+    case "rest-n-12":
+    case "rest-n-15":
+    case "rest-n-18":
+    case "rest-n-21":
+    case "rest-n-24":
+      S.restN = Number(nome.slice(7));
+      return render();
+    case "rest-limpar":
+      S.restPalavras = [];
+      return render();
     case "restaurar-ok": {
-      const f = $("#frase").value;
+      const campos = $$("#grade input");
+      const vazio = campos.findIndex((c) => !c.value.trim());
+      if (vazio >= 0) { $("#msg").innerHTML = `<div class="erro">Falta a palavra nº ${vazio + 1}.</div>`; campos[vazio].focus(); return; }
+      const ruim = campos.findIndex((c) => !K.palavraExiste(c.value));
+      if (ruim >= 0) { $("#msg").innerHTML = `<div class="erro">A palavra nº ${ruim + 1} ("${esc(campos[ruim].value.trim())}") não existe na lista. Confira a escrita.</div>`; campos[ruim].focus(); return; }
+      const f = campos.map((c) => c.value.trim()).join(" ");
       const problema = K.problemaDaFrase(f);
       if (problema) {
         $("#msg").innerHTML = `<div class="erro">${esc(problema)}</div>`;
         return;
       }
       S.frasePendente = K.normalizarFrase(f);
+      S.restPalavras = []; // não deixa as palavras na memória da tela
       return ir("DEFINIR_PIN");
     }
     case "esqueci":

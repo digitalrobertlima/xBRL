@@ -43,6 +43,23 @@ export function normalizarFrase(frase) {
   return String(frase || "").trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").split(/\s+/).filter(Boolean).join(" ");
 }
 
+/** A palavra existe na lista oficial em português ou em inglês? */
+export function palavraExiste(w) {
+  const x = normalizarFrase(w);
+  return !!x && !x.includes(" ") && (INDICE_PT.has(x) || ethers().wordlists.en.getWordIndex(x) >= 0);
+}
+
+/** Até `n` palavras das listas que começam com `prefixo` (para ajudar a digitar). */
+export function sugestoes(prefixo, n = 4) {
+  const p = normalizarFrase(prefixo);
+  if (p.length < 2 || p.includes(" ")) return [];
+  const out = [];
+  for (const w of PALAVRAS) { if (w.startsWith(p)) { out.push(w); if (out.length >= n) return out; } }
+  const en = ethers().wordlists.en;
+  for (let i = 0; i < 2048 && out.length < n; i++) { const w = en.getWord(i); if (w.startsWith(p) && !out.includes(w)) out.push(w); }
+  return out;
+}
+
 /** "pt", "en" ou null (palavras misturadas ou fora das listas). */
 export function idiomaDaFrase(frase) {
   const ws = normalizarFrase(frase).split(" ").filter(Boolean);

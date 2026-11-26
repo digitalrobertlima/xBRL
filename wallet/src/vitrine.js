@@ -49,12 +49,21 @@ export function limpar(o) {
   if (!o || typeof o !== "object") return null;
   const id = txt(o.id, 32);
   if (!/^[0-9a-z-]{4,32}$/.test(id)) return null;
+  if (o.t === "m" && id !== "motorista") return null;
   if (o.t === "s") return STATUS[o.status] ? { t: "s", id, status: o.status } : null;
   if (o.t === "l") {
     return {
       t: "l", id, nome: txt(o.nome, 60), desc: txt(o.desc, 400), horario: txt(o.horario, 80), bairro: txt(o.bairro, 40),
       endereco: txt(o.endereco, 120), lat: num(o.lat, -90, 90), lon: num(o.lon, -180, 180),
       taxa: valorTxt(o.taxa) || "0", entrega: ENTREGAS[o.entrega] ? o.entrega : "propria", status: STATUS[o.status] ? o.status : "ativo",
+      fotos: Array.isArray(o.fotos) ? o.fotos.slice(0, MAX_FOTOS).map((n) => num(n, 1, 5) | 0) : [],
+    };
+  }
+  if (o.t === "m") {
+    // Perfil público do motorista (como na 99: o passageiro confere carro, cor e placa antes de entrar)
+    return {
+      t: "m", id: "motorista", apelido: txt(o.apelido, 30), veiculo: ["moto", "pop", "plus"].includes(o.veiculo) ? o.veiculo : "pop",
+      modelo: txt(o.modelo, 40), cor: txt(o.cor, 20), placa: txt(o.placa, 10).toUpperCase(), status: STATUS[o.status] ? o.status : "ativo",
       fotos: Array.isArray(o.fotos) ? o.fotos.slice(0, MAX_FOTOS).map((n) => num(n, 1, 5) | 0) : [],
     };
   }
@@ -208,6 +217,11 @@ export class Vitrine {
   /** Perfil de loja de uma pessoa (ou null). */
   loja(conta) {
     return this.cache.itens[`${conta.toLowerCase()}:perfil`] || null;
+  }
+
+  /** Perfil de motorista de uma pessoa (ou null). */
+  motorista(conta) {
+    return conta ? this.cache.itens[`${conta.toLowerCase()}:motorista`] || null : null;
   }
 
   lojas() {

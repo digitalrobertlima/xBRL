@@ -173,3 +173,4 @@ export class Chat {
     return { conversa, para, cifrados, registrar, semChave };
   }
 }
+export { cifrar, decifrar };

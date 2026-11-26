@@ -11,14 +11,15 @@ import { ABIS, COFRE, CREATOR_TREASURY, ESCROW, REDE_PADRAO, REDES, SEGURANCA, T
 import * as K from "./keystore.js";
 import * as G from "./gas-tank.js";
 import { EscrowClient, REGRAS_NIVEL, codigoGuardado, codigoTemFormatoValido, gerarCodigoEntrega, guardarCodigo, hashChegada, hashCodigo, hashDevolucao, idConversa, normalizarCodigo } from "./escrow-client.js";
-import { Chat, MAX_CARACTERES } from "./chat.js";
+import { Chat, MAX_CARACTERES, cifrar as cifrarChat, decifrar as decifrarChat } from "./chat.js";
 import * as SG from "./semgas.js";
 import { marca, roseta } from "./marca.js";
 import { ProvedorRotativo } from "./rpc.js";
 import { AssinanteExterno, conectarInjetada, procurarPonte, temInjetada } from "./externa.js";
 import qrcode from "./vendor/qrcode.mjs";
-import { VEICULOS, VALIDADES_HORAS, descricaoCorrida, lerCorrida, enderecoCorrida, passoCorrida } from "./corrida.js";
-import { escolherPonto, botoesGps, textoDoPonto, coordenadasNoTexto, fmtCoord } from "./mapa.js";
+import { VEICULOS, VALIDADES_HORAS, descricaoCorrida, lerCorrida, enderecoCorrida, passoCorrida, tarifas, gravarTarifas, voltarTarifasPadrao, precoSugerido, distanciaKm, PREFIXO_CONTRA } from "./corrida.js";
+import { rotaPelaRua } from "./rota.js";
+import { escolherPonto, botoesGps, textoDoPonto, coordenadasNoTexto, fmtCoord, mapaFixo } from "./mapa.js";
 import * as CO from "./correio.js";
 import { CATEGORIAS, CAT, STATUS, ENTREGAS, MAX_FOTOS, Vitrine, codificar, conversaVitrine, montarItens, novoId, precoBr } from "./vitrine.js";
 
@@ -51,7 +52,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["VITRINE", "ANUNCIO", "ANUNCIAR", "MEUS_ANUNCIOS", "LOJA_EDITAR", "LOJA", "SACOLA", "CORRIDA", "MOTORISTA", "INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["VITRINE", "ANUNCIO", "ANUNCIAR", "MEUS_ANUNCIOS", "LOJA_EDITAR", "LOJA", "SACOLA", "CORRIDA", "MOTORISTA", "MEU_CARRO", "TARIFAS", "GANHOS", "INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA", "INICIO"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS", "INICIO"],
@@ -79,7 +80,7 @@ function ir(destino, params = {}) {
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta || !!S.externa;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
-  const aba = { ANUNCIO: "VITRINE", ANUNCIAR: "VITRINE", MEUS_ANUNCIOS: "VITRINE", LOJA_EDITAR: "VITRINE", LOJA: "VITRINE", SACOLA: "VITRINE", CORRIDA: "TRABALHOS", MOTORISTA: "TRABALHOS", TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
+  const aba = { ANUNCIO: "VITRINE", ANUNCIAR: "VITRINE", MEUS_ANUNCIOS: "VITRINE", LOJA_EDITAR: "VITRINE", LOJA: "VITRINE", SACOLA: "VITRINE", CORRIDA: "TRABALHOS", MOTORISTA: "TRABALHOS", MEU_CARRO: "TRABALHOS", TARIFAS: "TRABALHOS", GANHOS: "TRABALHOS", TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
   if (aberta) history.replaceState({ tela: destino }, "", location.pathname + location.search);
   window.scrollTo(0, 0);
@@ -1766,50 +1767,110 @@ async function venderBrlsPorPix() {
   ir("TRABALHOS", { aba: "meus" });
 }
 
-// ---------- Corrida (trabalho presencial com vaga aberta; ver corrida.js) ----------
+// ---------- Corrida no modelo da 99 (trabalho presencial; ver corrida.js) ----------
 const minhasCorridas = (meus) => meus.filter((t) => lerCorrida(t.descricao) && !t.encerrado);
 function cartaoCorrida(t, souPassageiro) {
   const c = lerCorrida(t.descricao);
-  return `<button class="item corrida" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${souPassageiro ? "Você pediu" : "Você dirige"}${c.pessoas > 1 ? ` · ${c.pessoas} pessoas` : ""}${c.obs ? ` · ${esc(c.obs)}` : ""}</span></span><b>${fmt(t.valor)}</b></button>`;
+  const extra = [c.nomeCategorias, c.pessoas > 1 ? `${c.pessoas} pessoas` : "", c.km != null ? `${String(c.km).replace(".", ",")} km` : "", c.expresso ? "⚡" : "", c.agendada ? `⏰ ${horaCurta(c.agendada)}` : ""].filter(Boolean).join(" · ");
+  return `<button class="item corrida" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${souPassageiro ? "Você pediu" : "Você dirige"} · ${esc(extra)}</span></span><b>${fmt(t.valor)}</b></button>`;
+}
+const horaCurta = (ts) => new Date(ts * 1000).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const brNum = (v, c = 2) => Number(v).toLocaleString("pt-BR", { minimumFractionDigits: c, maximumFractionDigits: c });
+const lerFavoritos = () => { try { return JSON.parse(localStorage.getItem("xbrl.favoritos") || "[]"); } catch { return []; } };
+const gravarFavoritos = (l) => { try { localStorage.setItem("xbrl.favoritos", JSON.stringify(l.slice(-20))); } catch { /* ok */ } };
+
+/** Texto curto do perfil do motorista (modelo, cor, placa). */
+function linhaMotorista(conta) {
+  const m = vit()?.motorista(conta);
+  if (!m) return `<span class="mudo">Sem perfil de veículo publicado</span>`;
+  return `<b>${esc(m.apelido || curto(conta))}</b> · ${esc(VEICULOS[m.veiculo]?.icone || "🚗")} ${esc(m.modelo)} ${esc(m.cor)} · placa <b class="placa">${esc(m.placa)}</b>`;
 }
 
 TELAS.CORRIDA = async () => {
   if (!S.escrow) return tela(`<h1>Corrida</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
-  S.corrida ||= { veiculo: "carro", pessoas: 1, validade: 2 };
-  const v = S.corrida.veiculo;
+  S.corrida ||= { categorias: ["pop"], pessoas: 1, validade: 2 };
+  const r = S.corrida;
+  const favs = lerFavoritos();
   tela(`
     <h1>🚗 Corrida</h1>
     <div id="corridas-ativas"><div class="cartao"><div class="giro"></div><p class="mudo">Lendo suas corridas…</p></div></div>
     <div class="cartao">
-      <h2 style="margin-top:0">Pedir uma corrida</h2>
-      <div class="grade duas" role="group" aria-label="Veículo">${Object.values(VEICULOS).map((x) => `<button class="atalho" data-acao="cor-veiculo-${x.id}" aria-pressed="${x.id === v}"><span>${x.icone}</span>${x.nome}</button>`).join("")}</div>
-      ${botaoPonto("🟢 Onde você vai embarcar", S.corrida.dePonto, "cor-mapa-de")}
-      <label for="cor-de">Bairro de embarque (é o que os motoristas veem)</label><input id="cor-de" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(S.corrida.de || "")}">
-      ${botaoPonto("🏁 Para onde você vai", S.corrida.paraPonto, "cor-mapa-para")}
-      <label for="cor-para">Bairro de destino (é o que os motoristas veem)</label><input id="cor-para" maxlength="40" placeholder="Ex.: Centro, Belo Horizonte" value="${esc(S.corrida.para || "")}">
-      ${VEICULOS[v].maxPessoas > 1 ? `<label for="cor-pessoas">Quantas pessoas</label><select id="cor-pessoas">${[1, 2, 3, 4].map((n) => `<option ${n === S.corrida.pessoas ? "selected" : ""}>${n}</option>`).join("")}</select>` : ""}
-      <label for="cor-obs">Observação (opcional, pública)</label><input id="cor-obs" maxlength="60" placeholder="Ex.: mala grande, pet pequeno" value="${esc(S.corrida.obs || "")}">
-      <label for="cor-valor">Quanto você paga pela corrida (BRLS)</label><input id="cor-valor" class="grande" inputmode="decimal" placeholder="0,00" value="${esc(S.corrida.valor || "")}">
-      <p class="mudo">Preço fechado: você decide antes, o motorista aceita ou não. Não muda no caminho.</p>
+      <h2 style="margin-top:0">Para onde vamos?</h2>
+      ${botaoPonto("🟢 Embarque", r.dePonto, "cor-mapa-de")}
+      <label for="cor-de">Bairro do embarque (é o que os motoristas veem)</label><input id="cor-de" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(r.de || "")}">
+      ${botaoPonto("🏁 Destino", r.paraPonto, "cor-mapa-para")}
+      <label for="cor-para">Bairro do destino (é o que os motoristas veem)</label><input id="cor-para" maxlength="40" placeholder="Ex.: Centro, Belo Horizonte" value="${esc(r.para || "")}">
+      <div id="cor-rota" class="mudo" aria-live="polite"></div>
+      <div id="cor-cats" class="cats-corrida" role="group" aria-label="Categorias"></div>
+      <p class="mudo">Escolha uma ou mais categorias: quem aceitar primeiro busca você.</p>
+      <label class="check"><input type="checkbox" id="cor-expresso" ${r.expresso ? "checked" : ""}> ⚡ Expresso: paga um pouco mais e aparece primeiro para os motoristas</label>
+      <label for="cor-pessoas">Quantas pessoas</label><select id="cor-pessoas">${[1, 2, 3, 4].map((n) => `<option ${n === r.pessoas ? "selected" : ""}>${n}</option>`).join("")}</select>
+      <label for="cor-obs">Observação (opcional, pública)</label><input id="cor-obs" maxlength="60" placeholder="Ex.: mala grande, pet pequeno" value="${esc(r.obs || "")}">
+      <label for="cor-valor">Quanto você paga (BRLS)</label><input id="cor-valor" class="grande" inputmode="decimal" placeholder="0,00" value="${esc(r.valor || "")}">
+      <p class="mudo" id="cor-sugestao">Marque embarque e destino para ver o preço sugerido.</p>
       <details><summary>Mais opções</summary>
-        <label for="cor-validade">O pedido vale por</label><select id="cor-validade">${VALIDADES_HORAS.map((h) => `<option value="${h}" ${h === S.corrida.validade ? "selected" : ""}>${h} hora${h > 1 ? "s" : ""}</option>`).join("")}</select>
-        <label for="cor-kit">⛽ Gás para o motorista (POL)</label><input id="cor-kit" inputmode="decimal" value="${esc(S.corrida.kit ?? "0,3")}">
+        <label for="cor-agendar">⏰ Agendar (deixe vazio para agora)</label><input id="cor-agendar" type="datetime-local" value="${esc(r.agendar || "")}">
+        <label for="cor-validade">O pedido fica aberto por</label><select id="cor-validade">${VALIDADES_HORAS.map((h) => `<option value="${h}" ${h === r.validade ? "selected" : ""}>${h} hora${h > 1 ? "s" : ""}</option>`).join("")}</select>
+        ${favs.length ? `<label for="cor-fav">⭐ Chamar direto um motorista favorito</label><select id="cor-fav"><option value="">Não: aberto para todos</option>${favs.map((f) => `<option value="${esc(f.conta)}" ${f.conta === r.favorito ? "selected" : ""}>${esc(f.nome || curto(f.conta))}</option>`).join("")}</select>` : ""}
+        <label for="cor-kit">⛽ Gás para o motorista (POL)</label><input id="cor-kit" inputmode="decimal" value="${esc(r.kit ?? "0,3")}">
         <p class="mudo">Chega ao motorista quando você aprovar ele, para ele nunca travar por falta de taxa. Se ninguém fizer a corrida, volta para você.</p>
+        <button class="btn sec" data-ir="TARIFAS">⚙️ Ajustar as tarifas sugeridas</button>
       </details>
-      <div class="ok">🔒 Os pontos exatos <b>não</b> vão para a blockchain: só o motorista que você aprovar recebe, pela conversa cifrada, e abre direto no Waze ou no Google Maps dele.</div>
+      <div class="ok">🔒 Os pontos exatos <b>não</b> vão para a blockchain: os motoristas veem só o bairro e um ponto aproximado (~1 km). O endereço exato vai cifrado ao motorista que você aprovar.</div>
       ${botaoSegurar("travar o pagamento e pedir", "pedir-corrida")}
       <p class="mudo">O valor fica travado no contrato até o fim da corrida. Se ninguém aceitar no prazo, você pega de volta. Taxa de 0,1% só quando o motorista recebe.</p>
     </div>
-    <button class="btn sec" data-ir="MOTORISTA">🚗 Sou motorista: ver pedidos</button>`);
-  // Guarda o que a pessoa digita (se a tela for redesenhada, nada se perde)
-  for (const [id, k] of [["cor-de", "de"], ["cor-para", "para"], ["cor-obs", "obs"], ["cor-valor", "valor"], ["cor-kit", "kit"]]) {
-    $(`#${id}`)?.addEventListener("input", (ev) => (S.corrida[k] = ev.target.value));
+    <div class="grade duas"><button class="atalho" data-ir="MOTORISTA"><span>🟢</span>Sou motorista</button><button class="atalho" data-ir="GANHOS"><span>📊</span>Meus ganhos</button></div>`);
+  for (const [id, k] of [["cor-de", "de"], ["cor-para", "para"], ["cor-obs", "obs"], ["cor-kit", "kit"], ["cor-agendar", "agendar"]]) {
+    $(`#${id}`)?.addEventListener("input", (ev) => (r[k] = ev.target.value));
   }
-  $("#cor-pessoas")?.addEventListener("change", (ev) => (S.corrida.pessoas = Number(ev.target.value)));
-  $("#cor-validade")?.addEventListener("change", (ev) => (S.corrida.validade = Number(ev.target.value)));
+  $("#cor-valor").addEventListener("input", (ev) => { r.valor = ev.target.value; r.valorEditado = true; });
+  $("#cor-pessoas").addEventListener("change", (ev) => (r.pessoas = Number(ev.target.value)));
+  $("#cor-validade").addEventListener("change", (ev) => (r.validade = Number(ev.target.value)));
+  $("#cor-fav")?.addEventListener("change", (ev) => (r.favorito = ev.target.value));
+  $("#cor-expresso").addEventListener("change", (ev) => { r.expresso = ev.target.checked; desenharPrecos(); });
+  desenharPrecos();
+  if (r.dePonto && r.paraPonto && !r.rota) calcularRota();
+  vit()?.sincronizar().catch(() => {});
   atualizarCorridasAtivas();
   vigiar("CORRIDA", atualizarCorridasAtivas, 12000);
 };
+
+async function calcularRota() {
+  const r = S.corrida;
+  if (!r.dePonto || !r.paraPonto) return;
+  const pedido = `${r.dePonto.lat},${r.dePonto.lon};${r.paraPonto.lat},${r.paraPonto.lon}`;
+  r.rotaPedido = pedido;
+  const box = $("#cor-rota");
+  if (box) box.textContent = "Calculando o caminho pela rua…";
+  const rota = await rotaPelaRua(r.dePonto, r.paraPonto);
+  if (r.rotaPedido !== pedido) return;
+  r.rota = rota;
+  desenharPrecos();
+}
+
+function desenharPrecos() {
+  const r = S.corrida;
+  const box = $("#cor-cats");
+  if (!box) return;
+  const t = tarifas();
+  const rota = r.rota;
+  const rb = $("#cor-rota");
+  if (rb) rb.innerHTML = rota ? `🛣️ <b>${brNum(rota.km, 1)} km</b> ${rota.fonte === "rua" ? "pela rua" : "(estimativa: o serviço de rotas não respondeu)"} · cerca de <b>${Math.max(1, Math.round(rota.min))} min</b>` : "";
+  box.innerHTML = ["moto", "pop", "plus"].map((k) => {
+    const v = VEICULOS[k];
+    const preco = rota ? precoSugerido(k, rota.km, rota.min, r.expresso, t) : null;
+    const on = r.categorias.includes(k);
+    return `<button data-acao="cor-cat-${k}" aria-pressed="${on}"><span class="ic">${v.icone}</span><b>${v.nome}</b><span>${preco ? `R$ ${brNum(preco)}` : "—"}</span><small class="mudo">${k === "moto" ? "1 pessoa" : k === "plus" ? "mais conforto" : "até 4 pessoas"}</small></button>`;
+  }).join("");
+  ligarSegurar(box);
+  const sug = $("#cor-sugestao");
+  if (!rota || !r.categorias.length) { if (sug && !r.categorias.length) sug.textContent = "Escolha pelo menos uma categoria."; return; }
+  const sugerido = Math.max(...r.categorias.map((k) => Number(precoSugerido(k, rota.km, rota.min, r.expresso, t)))).toFixed(2);
+  if (sug) sug.textContent = `Sugestão: R$ ${brNum(sugerido)}${r.categorias.length > 1 ? " (o preço da categoria mais cara escolhida: vale para quem aceitar)" : ""}. Você pode mudar: preço fechado, não muda no caminho.`;
+  const campo = $("#cor-valor");
+  if (campo && !r.valorEditado) { campo.value = brNum(sugerido); r.valor = campo.value; }
+}
 
 async function atualizarCorridasAtivas() {
   const box = $("#corridas-ativas");
@@ -1823,13 +1884,15 @@ async function atualizarCorridasAtivas() {
     const souP = t.cliente.toLowerCase() === eu;
     return `<div class="cartao corrida-ativa">${cartaoCorrida({ ...r, valor: t.valor }, souP)}<p class="passo-corrida">${esc(passoCorrida(t, souP).texto)}</p></div>`;
   }).join("");
-  const html = itens ? `<h2>Em andamento</h2><div id="cor-correio"></div>${itens}` : "";
+  const html = itens ? `<h2>Em andamento</h2><div id="cor-correio"></div><div id="cor-contra"></div>${itens}` : "";
   if (box.dataset.html !== html) {
     box.dataset.html = html;
     box.innerHTML = html;
   }
   // Motorista sem POL querendo a corrida, ou a outra parte pedindo para você enviar por ela
   await mostrarCorreio($("#cor-correio"), det.map((x) => x.t), null);
+  // Contrapropostas de motoristas para os seus pedidos abertos
+  await mostrarContrapropostas($("#cor-contra"), det.filter(({ t }) => t.cliente.toLowerCase() === eu && t.estado === 0 && !t.pendenteAprovacao).map((x) => x.t));
 }
 
 /** Repete `fn` a cada `ms` enquanto a tela `nome` estiver aberta e o app visível (sem redesenhar a tela toda). */
@@ -1842,46 +1905,79 @@ function vigiar(nome, fn, ms) {
   }, ms);
 }
 
+// ---------- Motorista online ----------
+const CHAVE_FILTROS = "xbrl.motorista.filtros";
+const lerFiltros = () => { try { return { veiculo: "todos", raio: 10, minKm: 0, ...JSON.parse(localStorage.getItem(CHAVE_FILTROS) || "{}") }; } catch { return { veiculo: "todos", raio: 10, minKm: 0 }; } };
+
 TELAS.MOTORISTA = async () => {
   if (!S.escrow) return tela(`<h1>Motorista</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
-  S.motorista ||= { filtro: "todos", vistos: null };
-  const f = S.motorista.filtro;
+  S.motorista ||= { online: false, vistos: null, aqui: null };
+  const m = S.motorista;
+  await vit()?.sincronizar().catch(() => {});
+  const perfil = vit()?.motorista(S.endereco);
+  const f = lerFiltros();
+  if (perfil && f.veiculo === "todos") f.veiculo = perfil.veiculo;
   const rep = await S.escrow.reputacao(S.endereco);
   tela(`
-    <h1>🚗 Pedidos de corrida</h1>
-    <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
-      <p class="mudo">Passageiros escolhem pela reputação. Cada corrida concluída e bem avaliada sobe o seu nível.</p></div>
-    <div class="seg" role="group" aria-label="Veículo">${[["todos", "Todos"], ["carro", "🚗 Carro"], ["moto", "🏍️ Moto"]].map(([k, n]) => `<button data-acao="mot-filtro-${k}" aria-pressed="${k === f}">${n}</button>`).join("")}</div>
-    <p class="mudo" id="mot-status">Procurando pedidos… deixe esta tela aberta: ela atualiza sozinha e avisa com vibração quando chega pedido novo.</p>
-    <div id="mot-lista"><div class="giro"></div></div>
+    <h1>🚗 Motorista</h1>
+    ${perfil ? `<div class="cartao"><div class="linha"><span>${linhaMotorista(S.endereco)}</span><button class="btn sec mini" data-ir="MEU_CARRO">Editar</button></div>
+      <div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div></div>`
+      : `<div class="aviso">🚘 <b>Cadastre seu veículo</b> (modelo, cor e placa). Os passageiros conferem antes de aprovar e antes de entrar.</div><button class="btn prim" data-ir="MEU_CARRO">🚘 Cadastrar meu veículo</button>`}
+    <button class="btn ${m.online ? "perigo" : "prim"}" data-acao="mot-online">${m.online ? "🔴 Ficar offline" : "🟢 Ficar online"}</button>
+    <details class="cartao"><summary><b>Filtros</b> <small class="mudo">${esc(f.veiculo === "todos" ? "todas as categorias" : VEICULOS[f.veiculo].nome)} · até ${f.raio ? f.raio + " km" : "qualquer distância"} · mínimo R$ ${brNum(f.minKm)}/km</small></summary>
+      <label for="mf-veiculo">Categoria</label><select id="mf-veiculo"><option value="todos">Todas</option>${["moto", "pop", "plus"].map((k) => `<option value="${k}" ${k === f.veiculo ? "selected" : ""}>${VEICULOS[k].icone} ${VEICULOS[k].nome}</option>`).join("")}</select>
+      <label for="mf-raio">Distância máxima até o embarque</label><select id="mf-raio">${[2, 5, 10, 20, 0].map((k) => `<option value="${k}" ${k === Number(f.raio) ? "selected" : ""}>${k ? k + " km" : "Qualquer"}</option>`).join("")}</select>
+      <label for="mf-minkm">Ganho mínimo por km (R$)</label><input id="mf-minkm" inputmode="decimal" value="${esc(brNum(f.minKm))}">
+      <button class="btn sec" data-acao="mot-filtros">Salvar filtros</button></details>
+    <p class="mudo" id="mot-status">${m.online ? "Online: procurando pedidos…" : "Você está offline. Fique online para receber pedidos (com som e vibração)."}</p>
+    <div id="mot-lista"></div>
     <div id="mot-minhas"></div>
-    <div class="aviso">Antes de aceitar: o passageiro paga o que está escrito, preço fechado. O dinheiro já está travado no contrato. Você recebe no destino com o código que o passageiro mostra.</div>
-    <p class="mudo">⛽ Sem POL? Pode aceitar assim mesmo: o pedido vai direto para o app do passageiro, ele aceita você e paga a taxa. O gás da corrida chega para você na hora.</p>`);
-  atualizarPedidos();
-  vigiar("MOTORISTA", atualizarPedidos, 10000);
+    <div class="aviso">O passageiro paga o que está escrito, preço fechado, e o dinheiro já está travado no contrato. Você recebe no destino com o código do passageiro. Achou o valor baixo? Abra o pedido e faça uma contraproposta.</div>
+    <p class="mudo">⛽ Sem POL? Pode aceitar assim mesmo: o pedido vai direto para o app do passageiro, ele aceita você e paga a taxa. O gás da corrida chega para você na hora.</p>
+    <button class="btn sec" data-ir="GANHOS">📊 Meus ganhos</button>`);
+  if (m.online) {
+    atualizarPedidos();
+    vigiar("MOTORISTA", atualizarPedidos, 10000);
+  } else atualizarPedidos(true);
 };
 
-async function atualizarPedidos() {
+function minhaPosicao() {
+  return new Promise((ok) => {
+    if (!navigator.geolocation) return ok(null);
+    navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude }), () => ok(null), { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+  });
+}
+
+async function atualizarPedidos(soMinhas = false) {
   if (!$("#mot-lista")) return;
   await S.escrow.sincronizar();
   const { meus, vagas } = await S.escrow.listar(S.endereco);
-  const box = $("#mot-lista");
-  if (!box) return;
-  const f = S.motorista.filtro;
-  const pedidos = vagas.filter((t) => { const c = lerCorrida(t.descricao); return c && (f === "todos" || c.veiculo === f); });
-  const ids = new Set(pedidos.map((t) => String(t.id)));
-  const novos = S.motorista.vistos ? [...ids].filter((id) => !S.motorista.vistos.has(id)) : [];
-  S.motorista.vistos = ids;
-  if (novos.length) avisarNovoPedido();
-  box.innerHTML = pedidos.map((t) => {
-    const c = lerCorrida(t.descricao);
-    return `<button class="item corrida" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${c.pessoas > 1 ? `${c.pessoas} pessoas · ` : ""}${c.obs ? `${esc(c.obs)} · ` : ""}vale até ${new Date(t.prazo * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span></span><b>${fmt(t.valor)}</b></button>`;
-  }).join("") || `<div class="cartao"><p class="mudo">Nenhum pedido agora. Assim que alguém pedir, aparece aqui.</p></div>`;
-  const st = $("#mot-status");
-  if (st) st.textContent = `Atualizado às ${new Date().toLocaleTimeString("pt-BR")}. ${pedidos.length} pedido${pedidos.length === 1 ? "" : "s"}.`;
   const minhas = minhasCorridas(meus).filter((t) => t.cliente.toLowerCase() !== S.endereco.toLowerCase());
   const mb = $("#mot-minhas");
   if (mb) mb.innerHTML = minhas.length ? `<h2>Suas corridas</h2>${minhas.map((t) => cartaoCorrida(t, false)).join("")}` : "";
+  const box = $("#mot-lista");
+  if (!box || soMinhas || !S.motorista.online) { if (box) box.innerHTML = ""; return; }
+  const m = S.motorista;
+  if (!m.aqui || Date.now() - (m.aquiEm || 0) > 60000) { m.aqui = (await minhaPosicao()) || m.aqui; m.aquiEm = Date.now(); }
+  const f = lerFiltros();
+  const perfil = vit()?.motorista(S.endereco);
+  const veiculo = f.veiculo === "todos" && perfil ? perfil.veiculo : f.veiculo;
+  const agoraS = agora();
+  const pedidos = vagas.map((t) => ({ t, c: lerCorrida(t.descricao) })).filter(({ c }) => c && (veiculo === "todos" || c.categorias.includes(veiculo) || (veiculo === "plus" && c.categorias.includes("pop"))))
+    .map((x) => ({ ...x, ate: m.aqui && x.c.aprox ? distanciaKm(m.aqui, x.c.aprox) * 1.35 : null, porKm: x.c.km ? Number(E.formatUnits(x.t.valor, 18)) / x.c.km : null }))
+    .filter((x) => !f.raio || x.ate == null || x.ate <= Number(f.raio))
+    .filter((x) => !Number(f.minKm) || x.porKm == null || x.porKm >= Number(f.minKm))
+    .filter((x) => !x.c.agendada || x.c.agendada - agoraS < 6 * 3600)
+    .sort((a, b) => (b.c.expresso - a.c.expresso) || ((a.ate ?? 99) - (b.ate ?? 99)));
+  const ids = new Set(pedidos.map((x) => String(x.t.id)));
+  const novos = m.vistos ? [...ids].filter((id) => !m.vistos.has(id)) : [];
+  m.vistos = ids;
+  if (novos.length) avisarNovoPedido();
+  const html = pedidos.map(({ t, c, ate, porKm }) => `<button class="item corrida ${c.expresso ? "expresso" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${[ate != null ? `🧭 ~${brNum(ate, 1)} km até o embarque` : "", c.km != null ? `${brNum(c.km, 1)} km de viagem` : "", porKm ? `R$ ${brNum(porKm)}/km` : "", c.pessoas > 1 ? `${c.pessoas} pessoas` : "", c.expresso ? "⚡ Expresso" : "", c.agendada ? `⏰ ${horaCurta(c.agendada)}` : "", c.obs].filter(Boolean).map(esc).join(" · ")}</span></span><b>${fmt(t.valor)}</b></button>`).join("")
+    || `<div class="cartao"><p class="mudo">Nenhum pedido no seu filtro agora. Assim que alguém pedir, aparece aqui com som.</p></div>`;
+  if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+  const st = $("#mot-status");
+  if (st) st.textContent = `Online · atualizado às ${new Date().toLocaleTimeString("pt-BR")} · ${pedidos.length} pedido${pedidos.length === 1 ? "" : "s"}${m.aqui ? "" : " · sem sua localização, a distância até o embarque não aparece"}.`;
 }
 
 function avisarNovoPedido(texto = "🚗 Pedido de corrida novo!") {
@@ -1900,19 +1996,43 @@ function avisarNovoPedido(texto = "🚗 Pedido de corrida novo!") {
   toast(texto);
 }
 
+// ---------- Pedir ----------
 async function pedirCorrida() {
   const r = S.corrida;
   const ler = (id) => ($(`#${id}`)?.value || "").trim();
   const de = ler("cor-de"), para = ler("cor-para");
   if (!r.dePonto || !r.paraPonto) throw new Error("Marque no mapa o ponto exato do embarque e do destino: é o que o motorista usa no GPS (só o motorista aprovado vê)");
   if (de.length < 3 || para.length < 3) throw new Error("Informe o bairro de embarque e o de destino");
+  if (!r.categorias.length) throw new Error("Escolha pelo menos uma categoria");
+  if (!r.rota) r.rota = await rotaPelaRua(r.dePonto, r.paraPonto);
   const valor = lerValor(ler("cor-valor"), 18);
   if (valor === 0n) throw new Error("Informe quanto você paga pela corrida");
   const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
-  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e a corrida é ${fmt(valor)}. Pegue BRLS na aba Reserva e tente de novo.`);
+  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e a corrida é ${fmt(valor)}. Compre BRLS com Pix na Vitrine (💱) e tente de novo.`);
   const kit = S.imp.Encaminhador ? lerValor(ler("cor-kit") || "0", 18) : 0n;
   if (kit > E.parseEther("5")) throw new Error("O gás para o motorista pode ser no máximo 5 POL");
   if (saldoPol < kit + E.parseEther("0.05")) throw new Error(`Você tem ${fmt(saldoPol, 18, 3)} POL: não dá para deixar ${fmt(kit, 18, 3)} de gás e ainda pagar a taxa. Diminua o gás em "Mais opções".`);
+  let agendada = null;
+  if (r.agendar) {
+    agendada = Math.floor(new Date(r.agendar).getTime() / 1000);
+    if (!Number.isFinite(agendada) || agendada < agora() + 10 * 60) throw new Error("Agende para pelo menos 10 minutos a partir de agora");
+    if (agendada > agora() + 30 * 86400) throw new Error("Agende para no máximo 30 dias");
+  }
+  const horas = VALIDADES_HORAS.includes(Number(r.validade)) ? Number(r.validade) : 2;
+  const favorito = r.favorito && E.isAddress(r.favorito) ? E.getAddress(r.favorito) : E.ZeroAddress;
+  const descricao = descricaoCorrida({ categorias: r.categorias, de, para, pessoas: r.pessoas, obs: ler("cor-obs"), aprox: { lat: r.dePonto.lat, lon: r.dePonto.lon }, km: r.rota.km, min: r.rota.min, expresso: r.expresso, agendada });
+  const { p, codigo } = novaCorrida({ trabalhador: favorito, valor, prazo: (agendada || agora()) + horas * 3600, descricao, privado: enderecoCorrida(r.dePonto, r.paraPonto) });
+  await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
+  S.corrida = { categorias: r.categorias, pessoas: 1, validade: r.validade };
+  modal(`<h2>✅ Corrida pedida</h2>
+    <p>O pagamento está travado. ${favorito !== E.ZeroAddress ? "Seu motorista favorito recebe o pedido." : "Deixe o app aberto: quando um motorista quiser, você vê o carro, a placa e a reputação e aprova."}</p>
+    <p><b>🔑 Código do destino</b> — mostre ao motorista <b>só quando chegar</b>. Com ele, o motorista recebe:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>
+    <p class="mudo">O código também fica salvo na tela da corrida.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  ir("CORRIDA");
+}
+
+/** Monta o trabalho de uma corrida (códigos guardados no aparelho). */
+function novaCorrida({ trabalhador, valor, prazo, descricao, privado }) {
   const palavras = valor >= E.parseEther("1000") ? 6 : 5;
   const codigo = gerarCodigoEntrega(palavras); // mostrado ao motorista no destino
   const codigoHash = hashCodigo(S.imp.EscrowTrabalho, S.endereco, codigo);
@@ -1920,30 +2040,217 @@ async function pedirCorrida() {
   const chegada = gerarCodigoEntrega(palavras); // exigido pelo contrato; na corrida o passageiro confirma o embarque com um toque
   const chegadaHash = hashChegada(S.imp.EscrowTrabalho, S.endereco, chegada);
   guardarCodigo(chegadaHash, chegada);
-  const horas = VALIDADES_HORAS.includes(Number(r.validade)) ? Number(r.validade) : 2;
-  const p = {
-    modalidade: 0,
-    trabalhador: E.ZeroAddress,
-    valor,
-    prazo: BigInt(agora() + horas * 3600),
-    etapas: 1,
-    codigoHash,
-    chegadaHash,
-    arbitroCliente: E.ZeroAddress,
-    desempateCriador: false,
-    caucao: 0n,
-    devolucaoHash: E.ZeroHash,
-    descricao: descricaoCorrida({ veiculo: r.veiculo, de, para, pessoas: r.pessoas, obs: ler("cor-obs") }),
-  };
-  try { localStorage.setItem(`xbrl.endereco.${chegadaHash}`, enderecoCorrida(r.dePonto, r.paraPonto)); } catch { /* sem armazenamento */ }
-  await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
-  S.corrida = { veiculo: r.veiculo, pessoas: 1, validade: r.validade };
-  modal(`<h2>✅ Corrida pedida</h2>
-    <p>O pagamento está travado. Deixe o app aberto: quando um motorista se candidatar, você vê a reputação dele e aprova.</p>
-    <p><b>🔑 Código do destino</b> — mostre ao motorista <b>só quando chegar</b>. Com ele, o motorista recebe:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>
-    <p class="mudo">O código também fica salvo na tela da corrida.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  try { localStorage.setItem(`xbrl.endereco.${chegadaHash}`, privado); } catch { /* sem armazenamento */ }
+  const p = { modalidade: 0, trabalhador, valor, prazo: BigInt(prazo), etapas: 1, codigoHash, chegadaHash, arbitroCliente: E.ZeroAddress, desempateCriador: false, caucao: 0n, devolucaoHash: E.ZeroHash, descricao };
+  return { p, codigo, chegadaHash };
+}
+
+// ---------- Contraproposta (motorista → passageiro, assinada, pelo avisador) ----------
+async function enviarContraproposta() {
+  const t = S.params.t;
+  const valor = lerValor($("#tr-contra").value);
+  if (valor <= t.valor) throw new Error("A contraproposta precisa ser maior que o valor oferecido");
+  const msg = JSON.stringify({ v: 1, t: "contra", id: String(t.id), valor: E.formatUnits(valor, 18), motorista: S.endereco, rede: S.chainId, em: agora() });
+  const sig = await S.carteira.signMessage(msg);
+  const ok = await CO.postarTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), PREFIXO_CONTRA + btoa(unescape(encodeURIComponent(JSON.stringify({ msg, sig })))));
+  toast(ok ? "Contraproposta enviada ao passageiro" : "O avisador não respondeu. Tente de novo.");
+}
+
+function lerContra(texto, t) {
+  try {
+    const { msg, sig } = JSON.parse(decodeURIComponent(escape(atob(texto.slice(PREFIXO_CONTRA.length)))));
+    const o = JSON.parse(msg);
+    if (o.t !== "contra" || String(o.id) !== String(t.id) || Number(o.rede) !== Number(S.chainId) || agora() - Number(o.em) > 1800) return null;
+    if (E.verifyMessage(msg, sig).toLowerCase() !== String(o.motorista).toLowerCase()) return null;
+    const valor = E.parseUnits(String(o.valor), 18);
+    if (valor <= t.valor || valor > t.valor * 3n) return null;
+    return { texto, motorista: E.getAddress(o.motorista), valor, k: E.id(texto).slice(2, 14), t };
+  } catch {
+    return null;
+  }
+}
+
+async function mostrarContrapropostas(box, abertas) {
+  if (!box) return;
+  const itens = [];
+  for (const t of abertas) {
+    const textos = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "1h", PREFIXO_CONTRA).catch(() => []);
+    for (const x of textos) { if (!CO.jaResolvido(x)) { const c2 = lerContra(x, t); if (c2) itens.push(c2); } }
+  }
+  S.contras = new Map(itens.map((x) => [x.k, x]));
+  if (itens.length) await vit()?.sincronizar().catch(() => {}); // carro e placa de quem propôs
+  const reps = await Promise.all(itens.map((x) => S.escrow.reputacao(x.motorista).catch(() => null)));
+  const html = itens.map((x, i) => `<div class="cartao correio destaque"><h2 style="margin-top:0">💬 Contraproposta: R$ ${brNum(E.formatUnits(x.valor, 18))}</h2>
+      <p>${linhaMotorista(x.motorista)} ${reps[i] ? estrelasNivel(reps[i].nivel) : ""}</p>
+      <p class="mudo">Você ofereceu R$ ${fmt(x.t.valor)}. Aceitando, o pedido antigo é cancelado (o dinheiro volta) e um novo, de R$ ${brNum(E.formatUnits(x.valor, 18))}, vai direto para este motorista.</p>
+      ${botaoSegurar("aceitar a contraproposta", `contra:${x.k}`)}<button class="btn sec" data-acao="contra-recusar" data-k="${esc(x.k)}">Recusar</button></div>`).join("");
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+    ligarSegurar(box);
+    if (html) avisarNovoPedido("💬 Um motorista fez uma contraproposta");
+  }
+}
+
+async function aceitarContraproposta(k) {
+  const x = S.contras?.get(k);
+  if (!x) throw new Error("Essa contraproposta não está mais aqui. Atualize a tela.");
+  const antigo = await S.escrow.detalhe(x.t.id);
+  if (antigo.estado !== 0 || antigo.pendenteAprovacao) throw new Error("O pedido já mudou (alguém aceitou). Atualize a tela.");
+  const resumo = S.escrow.resumoTrabalhos().get(String(x.t.id));
+  const privado = (() => { try { return localStorage.getItem(`xbrl.endereco.${antigo.chegadaHash}`) || ""; } catch { return ""; } })();
+  const { p, codigo } = novaCorrida({ trabalhador: x.motorista, valor: x.valor, prazo: agora() + 2 * 3600, descricao: resumo.descricao, privado });
+  const kit = antigo.kitGas || 0n;
+  await executar("Aceitar contraproposta", [
+    passoEscrow("Cancelar o pedido antigo", "cancelar", [BigInt(x.t.id)]),
+    passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, x.valor, "Autorizar BRLS"),
+    { rotulo: "Travar o novo valor para o motorista", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) },
+  ]);
+  CO.resolver(x.texto);
+  modal(`<h2>✅ Combinado</h2><p>O motorista recebe o pedido e aceita. Depois, envie o endereço exato na tela da corrida.</p><p><b>🔑 Novo código do destino</b>:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   ir("CORRIDA");
 }
+
+// ---------- Na corrida: posição do motorista (cifrada só para o passageiro) ----------
+const PREFIXO_LOC = "brlsloc:";
+async function enviarMinhaPosicao(t) {
+  if (S.ultimaPosEnviada && Date.now() - S.ultimaPosEnviada < 20000) return;
+  const pos = await minhaPosicao();
+  if (!pos) return;
+  const pub = await S.chat.chaveDe(t.cliente, t.txCriacao ? [t.txCriacao] : []);
+  if (!pub) return;
+  const cif = await cifrarChat(S.carteira, pub, JSON.stringify({ lat: Number(pos.lat.toFixed(5)), lon: Number(pos.lon.toFixed(5)), em: agora() }));
+  S.ultimaPosEnviada = Date.now();
+  await CO.postarTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), PREFIXO_LOC + cif).catch(() => {});
+}
+
+async function mostrarMotoristaNoMapa(t, embarque) {
+  const box = $("#cor-mapa");
+  if (!box) return;
+  const textos = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "15m", PREFIXO_LOC).catch(() => []);
+  if (!textos.length) return;
+  const pub = await S.chat.chaveDe(t.trabalhador, t.txAceite ? [t.txAceite] : []);
+  if (!pub) return;
+  let ultima = null;
+  for (const x of textos.slice(-5)) {
+    try {
+      const d = JSON.parse((await decifrarChat(S.carteira, pub, x.slice(PREFIXO_LOC.length))).texto);
+      if (!ultima || d.em > ultima.em) ultima = d;
+    } catch { /* não é para mim */ }
+  }
+  if (!ultima) return;
+  const pontos = [{ lat: ultima.lat, lon: ultima.lon, icone: "🚗", rotulo: "Motorista" }];
+  if (embarque && !t.chegou) pontos.push({ ...embarque, icone: "🟢", rotulo: "Embarque" });
+  mapaFixo(box, pontos);
+  const info = $("#cor-eta");
+  if (info) {
+    const min = embarque && !t.chegou ? Math.max(1, Math.round(((distanciaKm(ultima, embarque) * 1.35) / 24) * 60)) : null;
+    info.textContent = `${min ? `Motorista a ~${min} min do embarque · ` : ""}posição de ${new Date(ultima.em * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+}
+
+async function compartilharCorrida() {
+  const t = S.params.t;
+  const cor = lerCorrida(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao);
+  const m = vit()?.motorista(t.trabalhador);
+  const texto = `🚗 Estou numa corrida pelo BRLS\nDe: ${cor.de}\nPara: ${cor.para}\nMotorista: ${m?.apelido || curto(t.trabalhador)}${m ? `\nVeículo: ${m.modelo} ${m.cor} · placa ${m.placa}` : ""}\nCarteira do motorista: ${t.trabalhador}\nSaída: ${new Date().toLocaleString("pt-BR")}`;
+  if (navigator.share) { try { await navigator.share({ text: texto }); return; } catch { /* cancelou */ } }
+  await navigator.clipboard.writeText(texto);
+  toast("Dados da corrida copiados: cole no WhatsApp de alguém de confiança.");
+}
+
+// ---------- Perfil do veículo, tarifas e ganhos ----------
+TELAS.MEU_CARRO = async () => {
+  await vit()?.sincronizar().catch(() => {});
+  const m = vit()?.motorista(S.endereco) || { apelido: "", veiculo: "pop", modelo: "", cor: "", placa: "" };
+  tela(`
+    <h1>🚘 Meu veículo</h1>
+    <p class="mudo">Fica público na vitrine, como na 99: o passageiro confere carro, cor e placa antes de aprovar e antes de entrar.</p>
+    <label for="mc-apelido">Seu nome ou apelido</label><input id="mc-apelido" maxlength="30" value="${esc(m.apelido)}">
+    <label for="mc-veiculo">Categoria</label><select id="mc-veiculo">${["moto", "pop", "plus"].map((k) => `<option value="${k}" ${k === m.veiculo ? "selected" : ""}>${VEICULOS[k].icone} ${VEICULOS[k].nome}</option>`).join("")}</select>
+    <label for="mc-modelo">Modelo</label><input id="mc-modelo" maxlength="40" placeholder="Ex.: Onix 2020" value="${esc(m.modelo)}">
+    <label for="mc-cor">Cor</label><input id="mc-cor" maxlength="20" placeholder="Ex.: prata" value="${esc(m.cor)}">
+    <label for="mc-placa">Placa</label><input id="mc-placa" maxlength="10" autocapitalize="characters" placeholder="ABC1D23" value="${esc(m.placa)}">
+    <label for="mc-foto">Sua foto (opcional, ajuda o passageiro a reconhecer você)</label><input id="mc-foto" type="file" accept="image/*">
+    ${botaoSegurar("publicar meu veículo", "mc-publicar")}
+    <button class="btn sec" data-ir="MOTORISTA">Voltar</button>`);
+  $("#mc-foto").addEventListener("change", (ev) => { S.carroFoto = ev.target.files[0] || null; });
+};
+
+async function publicarCarro() {
+  const ler = (id) => ($(`#${id}`)?.value || "").trim();
+  const o = { t: "m", id: "motorista", apelido: ler("mc-apelido"), veiculo: ler("mc-veiculo"), modelo: ler("mc-modelo"), cor: ler("mc-cor"), placa: ler("mc-placa").toUpperCase().replace(/[^A-Z0-9]/g, ""), status: "ativo" };
+  if (o.apelido.length < 2 || o.modelo.length < 2 || o.cor.length < 2) throw new Error("Preencha nome, modelo e cor");
+  if (!/^[A-Z]{3}\d[A-Z0-9]\d{2}$/.test(o.placa)) throw new Error("Placa inválida (ex.: ABC1D23 ou ABC1234)");
+  const ant = vit().motorista(S.endereco);
+  let itens;
+  if (S.carroFoto || !ant?.fotos?.length) itens = await montarItens(o, S.carroFoto ? [S.carroFoto] : []);
+  else { await vit().fotos(ant); itens = [codificar({ ...o, fotos: ant.fotos }), ...(vit().fotosMem.get(ant.tx) || [])]; }
+  await publicarItens("Publicar meu veículo", itens);
+  S.carroFoto = null;
+  await vit().sincronizar().catch(() => {});
+  ir("MOTORISTA");
+}
+
+TELAS.TARIFAS = async () => {
+  const t = tarifas();
+  const campo = (k, f) => `<input id="tf-${k}-${f}" inputmode="decimal" value="${esc(brNum(t[k][f]))}" aria-label="${VEICULOS[k].nome} ${f}">`;
+  tela(`
+    <h1>⚙️ Tarifas sugeridas</h1>
+    <p class="mudo">É só a sugestão que aparece ao pedir: quem pede sempre pode mudar o preço. Fica salvo neste aparelho.</p>
+    <div class="cartao tarifas"><div class="tf-linha tf-cab"><span></span><b>Base</b><b>Por km</b><b>Por min</b></div>
+      ${["moto", "pop", "plus"].map((k) => `<div class="tf-linha"><b>${VEICULOS[k].icone} ${VEICULOS[k].nome}</b>${campo(k, "base")}${campo(k, "km")}${campo(k, "min")}</div>`).join("")}</div>
+    <label for="tf-expresso">⚡ Expresso: quanto a mais (%)</label><input id="tf-expresso" inputmode="decimal" value="${esc(brNum(t.expresso, 0))}">
+    <label for="tf-minimo">Preço mínimo de uma corrida (R$)</label><input id="tf-minimo" inputmode="decimal" value="${esc(brNum(t.minimo))}">
+    <p class="mudo" id="tf-exemplo"></p>
+    <button class="btn prim" data-acao="tf-salvar">Salvar tarifas</button>
+    <button class="btn sec" data-acao="tf-padrao">Voltar às tarifas padrão</button>
+    <button class="btn sec" data-ir="CORRIDA">Voltar</button>`);
+  const exemplo = () => {
+    try {
+      const nt = lerTarifasDaTela();
+      $("#tf-exemplo").textContent = `Exemplo: 8 km em 20 min = Moto R$ ${brNum(precoSugerido("moto", 8, 20, false, nt))} · Pop R$ ${brNum(precoSugerido("pop", 8, 20, false, nt))} · Plus R$ ${brNum(precoSugerido("plus", 8, 20, false, nt))}`;
+    } catch { /* digitando */ }
+  };
+  $$(".tarifas input, #tf-expresso, #tf-minimo").forEach((i) => i.addEventListener("input", exemplo));
+  exemplo();
+};
+function lerTarifasDaTela() {
+  const n = (id) => { const v = Number(String($(`#${id}`).value).replace(/\./g, "").replace(",", ".")); if (!Number.isFinite(v) || v < 0) throw new Error("Valor inválido nas tarifas"); return v; };
+  const t = { expresso: n("tf-expresso"), minimo: n("tf-minimo") };
+  for (const k of ["moto", "pop", "plus"]) t[k] = { base: n(`tf-${k}-base`), km: n(`tf-${k}-km`), min: n(`tf-${k}-min`) };
+  return t;
+}
+
+TELAS.GANHOS = async () => {
+  tela(`<h1>📊 Meus ganhos</h1><div class="cartao"><div class="giro"></div><p class="mudo">Somando suas corridas…</p></div>`);
+  await S.escrow.sincronizar();
+  const eu = S.endereco.toLowerCase();
+  const feitas = [...S.escrow.resumoTrabalhos().values()].filter((t) => t.fim === "concluido" && t.trabalhador?.toLowerCase() === eu && lerCorrida(t.descricao)).slice(-200);
+  const blocos = new Map();
+  for (const t of feitas) {
+    const b = t.historico.find((h) => h.nome === "TrabalhoConcluido")?.bloco ?? t.bloco;
+    if (!blocos.has(b)) blocos.set(b, S.provider.getBlock(b).then((x) => Number(x?.timestamp || 0)).catch(() => 0));
+  }
+  const linhas = await Promise.all(feitas.map(async (t) => {
+    const b = t.historico.find((h) => h.nome === "TrabalhoConcluido")?.bloco ?? t.bloco;
+    const c2 = lerCorrida(t.descricao);
+    return { em: await blocos.get(b), valor: Number(E.formatUnits(t.valor, 18)) * 0.999, km: c2.km || 0, t, c: c2 };
+  }));
+  const agoraS = agora();
+  const inicioHoje = Math.floor(new Date().setHours(0, 0, 0, 0) / 1000);
+  const soma = (l) => ({ n: l.length, v: l.reduce((s, x) => s + x.valor, 0), km: l.reduce((s, x) => s + x.km, 0) });
+  const hoje = soma(linhas.filter((x) => x.em >= inicioHoje));
+  const semana = soma(linhas.filter((x) => x.em >= agoraS - 7 * 86400));
+  const total = soma(linhas);
+  const bloco = (nome, s) => `<div class="linha"><span>${nome}</span><span><b>R$ ${brNum(s.v)}</b> <small class="mudo">${s.n} corrida${s.n === 1 ? "" : "s"}${s.km ? ` · ${brNum(s.km, 1)} km · R$ ${brNum(s.v / s.km)}/km` : ""}</small></span></div>`;
+  tela(`
+    <h1>📊 Meus ganhos</h1>
+    <div class="cartao">${bloco("Hoje", hoje)}${bloco("Últimos 7 dias", semana)}${bloco("Total", total)}</div>
+    <p class="mudo">Já sem a taxa de 0,1% do protocolo. Gorjetas chegam direto na carteira (veja o Extrato).</p>
+    <h2>Últimas corridas</h2>${linhas.slice(-15).reverse().map((x) => `<div class="linha"><span>${esc(x.c.de)} → ${esc(x.c.para)}<br><small class="mudo">${x.em ? esc(horaCurta(x.em)) : ""}${x.km ? ` · ${brNum(x.km, 1)} km` : ""}</small></span><b>R$ ${brNum(x.valor)}</b></div>`).join("") || `<p class="mudo">Nenhuma corrida concluída ainda.</p>`}
+    <button class="btn sec" data-ir="MOTORISTA">Voltar</button>`);
+};
 
 TELAS.TRABALHO_NOVO = () => {
   const m = Number(S.params.modalidade ?? 0);
@@ -1983,6 +2290,7 @@ TELAS.TRABALHO = async () => {
   const resumo = S.escrow.resumoTrabalhos().get(String(id));
   const m = ESCROW.modalidades[t.modalidade];
   const cor = t.modalidade === 0 ? lerCorrida(resumo?.descricao) : null; // corrida de carro/moto
+  if (cor) await vit()?.sincronizar().catch(() => {}); // perfil do motorista (carro, cor, placa)
   // Na corrida o passageiro confirma o embarque com um toque (o código de chegada fica guardado)
   const acoes = S.escrow.acoesPossiveis(t, S.endereco).filter((a) => !(cor && a === "confirmarChegada"));
   const [rc, rt] = await Promise.all([S.escrow.reputacao(t.cliente), t.trabalhador !== E.ZeroAddress ? S.escrow.reputacao(t.trabalhador) : null]);
@@ -2033,8 +2341,8 @@ TELAS.TRABALHO = async () => {
   });
   tela(`
     ${cor ? `<h1>${cor.icone} Corrida: ${esc(cor.de)} → ${esc(cor.para)}</h1>
-    <p class="mudo">#${esc(t.id)} · ${cor.veiculo === "moto" ? "Moto" : "Carro"}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
-    <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>` : `<h1>${iconeDesc(resumo?.descricao, m).map((x, i) => (i ? esc(x) : x)).join(" ")}</h1>
+    <p class="mudo">#${esc(t.id)} · ${esc(cor.nomeCategorias)}${cor.km != null ? ` · ${brNum(cor.km, 1)} km` : ""}${cor.expresso ? " · ⚡ Expresso" : ""}${cor.agendada ? ` · ⏰ ${esc(horaCurta(cor.agendada))}` : ""}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
+    <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>${blocoCorrida(t, souCliente)}` : `<h1>${iconeDesc(resumo?.descricao, m).map((x, i) => (i ? esc(x) : x)).join(" ")}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
     ${!ativo ? `<div class="ok">📁 <b>Arquivado.</b> ${t.estado === 5 ? "Cancelado: o valor travado voltou para a carteira de quem contratou." : "Concluído: o pagamento já foi feito."} Os códigos deste trabalho não valem mais.</div>` : ""}
     <div class="cartao">
@@ -2087,11 +2395,46 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
     const digitando = document.activeElement?.matches?.("input,textarea,select");
     if (fotoTrabalho(agora) !== foto && !digitando) return render();
     await mostrarCorreio($("#correio"), [agora], cor);
+    if (cor && agora.estado === 1) {
+      if (agora.trabalhador.toLowerCase() === S.endereco.toLowerCase()) await enviarMinhaPosicao(agora);
+      else if (souCliente) await mostrarMotoristaNoMapa(agora, coordenadasNoTexto(enderecoGuardado || "")[0]);
+    }
   };
+  const mot = t.trabalhador !== E.ZeroAddress ? t.trabalhador : t.candidato;
+  const perfilMot = cor && mot ? vit()?.motorista(mot) : null;
+  if (perfilMot?.fotos?.length) vit().fotos(perfilMot).then((u) => { const b = $("#cor-foto-mot"); if (b && u[0]) b.innerHTML = `<img src="${u[0]}" alt="Foto do motorista">`; }).catch(() => {});
   if ($("#rota")) carregarRota(t);
   vivo().catch(() => {});
   vigiar("TRABALHO", vivo, 12000);
 };
+
+/** Partes da corrida na tela do trabalho: motorista, mapa, segurança, cancelamento, contraproposta, gorjeta. */
+function blocoCorrida(t, souCliente) {
+  const z = E.ZeroAddress;
+  const mot = t.trabalhador !== z ? t.trabalhador : t.candidato && t.candidato !== z ? t.candidato : null;
+  const p = [];
+  if (mot && souCliente) {
+    p.push(`<div class="cartao motorista"><p class="mudo" style="margin:0">${t.pendenteAprovacao ? "🙋 Quer fazer sua corrida:" : "🚗 Seu motorista:"}</p><div id="cor-foto-mot" class="fotos mini"></div><p>${linhaMotorista(mot)}</p>${t.estado === 1 && !t.chegou ? `<p class="aviso" style="margin:0">Confira o carro e a placa antes de entrar.</p>` : ""}</div>`);
+  }
+  if (t.estado === 1) {
+    if (souCliente) p.push(`<div id="cor-mapa"></div><p class="mudo" id="cor-eta">${t.chegou ? "" : "A posição do motorista aparece aqui quando ele estiver a caminho (cifrada, só você vê)."}</p>`);
+    p.push(`<div class="grade duas"><button class="btn sec" data-acao="cor-compartilhar">📤 Compartilhar corrida</button><a class="btn perigo" href="tel:190">🚨 Emergência 190</a></div>`);
+    if (souCliente) p.push(`<button class="btn sec" data-acao="cor-cancelar">Cancelar a corrida</button>`);
+  }
+  if (t.estado === 3 && !souCliente && t.propostaCliente) {
+    const bps = Number(t.propostaCliente) - 1;
+    p.push(`<div class="cartao correio destaque"><h2 style="margin-top:0">O passageiro pediu para cancelar</h2><p>Ele propõe <b>${bps / 100}%</b> do valor para você (R$ ${fmt((t.valor * BigInt(bps)) / 10000n)}). Aceitando, o contrato divide na hora.</p>${botaoSegurar("aceitar o cancelamento", "cor-acordo-aceitar")}<p class="mudo">Não concorda? Faça outra proposta abaixo; sem acordo, em 30 dias divide meio a meio.</p></div>`);
+  }
+  if (t.estado === 0 && !souCliente && !t.pendenteAprovacao && t.trabalhador === z) {
+    const sug = (Number(E.formatUnits(t.valor, 18)) * 1.2).toFixed(2);
+    p.push(`<details class="cartao"><summary><b>💬 Achou baixo? Faça uma contraproposta</b></summary><label for="tr-contra">Seu preço (R$)</label><input id="tr-contra" inputmode="decimal" value="${esc(brNum(sug))}"><button class="btn sec" data-acao="tr-contra-enviar">Enviar contraproposta</button><p class="mudo">O passageiro vê no app e decide. Se aceitar, a corrida vem direto para você.</p></details>`);
+  }
+  if (t.estado === 4 && souCliente && t.trabalhador !== z) {
+    const fav = lerFavoritos().some((f) => f.conta.toLowerCase() === t.trabalhador.toLowerCase());
+    p.push(`<div class="cartao"><h2 style="margin-top:0">💛 Gorjeta (opcional)</h2><input id="cor-gorjeta-v" inputmode="decimal" placeholder="0,00">${botaoSegurar("enviar a gorjeta", "cor-gorjeta")}${fav ? `<p class="mudo">⭐ Este motorista já é seu favorito.</p>` : `<button class="btn sec" data-acao="cor-favoritar">⭐ Favoritar este motorista</button>`}</div>`);
+  }
+  return p.join("");
+}
 
 const fotoTrabalho = (t) => [t.estado, t.trabalhador, t.candidato, t.chegou, t.encerrado, t.pendenteAprovacao].join("|");
 
@@ -2187,6 +2530,7 @@ function cartaoCorreio(t, item, cor) {
     const precisaAprovar = t.modalidade !== 1 && t.trabalhador === E.ZeroAddress;
     return `<div class="cartao correio destaque">
       <h2 style="margin-top:0">🙋 ${cor ? "Um motorista quer fazer sua corrida" : "Alguém quer aceitar seu trabalho"}</h2>
+      ${cor ? `<p>${linhaMotorista(item.de)}</p>` : ""}
       <div class="linha"><span>${esc(curto(item.de))}</span><span>${r ? `${estrelasNivel(r.nivel)} <b>${esc(r.nomeNivel)}</b> <small class="mudo">${Number(r.contrapartes)} ${Number(r.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${r.idadeDias} dias</small>` : ""}</span></div>
       <p>${cor ? "Ele" : "A pessoa"} está <b>sem POL</b> para a taxa da rede. Se você aceitar, o seu app envia o pedido ${cor ? "dele" : "dela"} (você paga a taxa, centavos)${precisaAprovar ? ` e já ${cor ? "aprova ele como seu motorista" : "aprova a pessoa"}` : ""}.${t.kitGas > 0n ? ` O gás que você deixou (${fmt(t.kitGas, 18, 2)} POL) vai para ${cor ? "ele" : "ela"}, para não travar no caminho.` : ""}</p>
       ${botaoSegurar(cor ? "aceitar este motorista" : "aceitar esta pessoa", `correio-aceitar:${k}`)}
@@ -2439,18 +2783,60 @@ async function acao(nome, el) {
       fecharModal();
       if (ABERTAS.includes(S.tela)) render().catch(mostrarErro);
       return;
-    case "cor-veiculo-carro":
-    case "cor-veiculo-moto":
-      S.corrida.veiculo = nome.slice(12);
-      if (VEICULOS[S.corrida.veiculo].maxPessoas < (S.corrida.pessoas || 1)) S.corrida.pessoas = 1;
-      return render();
-    case "mot-filtro-todos":
-    case "mot-filtro-carro":
-    case "mot-filtro-moto":
-      S.motorista.filtro = nome.slice(11);
+    case "cor-cat-moto":
+    case "cor-cat-pop":
+    case "cor-cat-plus": {
+      const k = nome.slice(8);
+      const l = S.corrida.categorias;
+      S.corrida.categorias = l.includes(k) ? l.filter((x) => x !== k) : [...l, k];
+      return desenharPrecos();
+    }
+    case "mot-online":
+      S.motorista.online = !S.motorista.online;
       S.motorista.vistos = null;
-      for (const b of $$('[data-acao^="mot-filtro-"]')) b.setAttribute("aria-pressed", String(b.dataset.acao === nome));
-      return atualizarPedidos();
+      if (S.motorista.online) S.motorista.aqui = await minhaPosicao();
+      return render();
+    case "mot-filtros": {
+      const f = { veiculo: $("#mf-veiculo").value, raio: Number($("#mf-raio").value), minKm: Number(String($("#mf-minkm").value).replace(",", ".")) || 0 };
+      try { localStorage.setItem(CHAVE_FILTROS, JSON.stringify(f)); } catch { /* ok */ }
+      S.motorista.vistos = null;
+      toast("Filtros salvos");
+      return render();
+    }
+    case "tf-salvar":
+      gravarTarifas(lerTarifasDaTela());
+      if (S.corrida) S.corrida.valorEditado = false;
+      toast("Tarifas salvas");
+      return ir("CORRIDA");
+    case "tf-padrao":
+      voltarTarifasPadrao();
+      return render();
+    case "contra-recusar": {
+      const x = S.contras?.get(el.dataset.k);
+      if (x) CO.resolver(x.texto);
+      el.closest(".correio")?.remove();
+      return toast("Contraproposta recusada");
+    }
+    case "tr-contra-enviar":
+      return enviarContraproposta();
+    case "cor-compartilhar":
+      return compartilharCorrida();
+    case "cor-favoritar": {
+      const t = S.params.t;
+      const l = lerFavoritos().filter((f) => f.conta.toLowerCase() !== t.trabalhador.toLowerCase());
+      const m = vit()?.motorista(t.trabalhador);
+      l.push({ conta: t.trabalhador, nome: m ? `${m.apelido} · ${m.modelo} ${m.placa}` : curto(t.trabalhador) });
+      gravarFavoritos(l);
+      toast("⭐ Motorista favoritado: na próxima, chame ele direto em Mais opções.");
+      return render();
+    }
+    case "cor-cancelar":
+      modal(`<h2>Cancelar a corrida</h2><p>O motorista já aceitou. Para cancelar, proponha quanto ele recebe pelo tempo e pelo caminho que já fez (o resto volta para você). Se ele concordar, o contrato divide na hora.</p>
+        <label for="cc-pct">Para o motorista: <b id="cc-pct-v">${S.params.t.chegou ? 50 : 20}%</b></label><input type="range" id="cc-pct" min="0" max="100" step="5" value="${S.params.t.chegou ? 50 : 20}">
+        <p class="mudo">Sugestão: 20% se ele ainda está a caminho; mais se já chegou e esperou.</p>
+        ${botaoSegurar("pedir o cancelamento", "cor-cancelar-ok")}<button class="btn sec" data-acao="fechar-modal">Voltar</button>`);
+      $("#cc-pct")?.addEventListener("input", (ev) => ($("#cc-pct-v").textContent = ev.target.value + "%"));
+      return;
     case "criar":
       S.frasePendente = null;
       return ir("CRIAR_FRASE");
@@ -2702,6 +3088,7 @@ async function acao(nome, el) {
 async function confirmar(nome) {
   if (nome.startsWith("correio-")) return enviarDoCorreio(nome);
   if (nome.startsWith("pixok:")) return aceitarPedidoPix(nome.slice(6));
+  if (nome.startsWith("contra:")) return aceitarContraproposta(nome.slice(7));
   const vitrineAcoes = { "na-publicar": publicarAnuncio, "lj-publicar": publicarLoja, "an-comprar": () => comprarAnuncio(false), "an-contratar": () => comprarAnuncio(true), "pix-pedir": pedirCompraPix, "pix-vender": venderBrlsPorPix, "sac-pedir": fazerPedidoComida };
   if (vitrineAcoes[nome]) return vitrineAcoes[nome]();
   switch (nome) {
@@ -2765,6 +3152,24 @@ async function confirmar(nome) {
       return;
     case "criar-trabalho":
       return criarTrabalho();
+    case "mc-publicar":
+      return publicarCarro();
+    case "cor-cancelar-ok": {
+      const t = S.params.t;
+      const bps = Number($("#cc-pct").value) * 100;
+      return executar("Cancelar a corrida", [passoEscrow("Abrir o cancelamento", "abrirDisputa", [BigInt(t.id)]), passoEscrow(`Propor ${bps / 100}% ao motorista`, "proporAcordo", [BigInt(t.id), bps])]);
+    }
+    case "cor-acordo-aceitar": {
+      const t = S.params.t;
+      const bps = Math.max(0, Number(t.propostaCliente) - 1);
+      return executar("Aceitar o cancelamento", [passoEscrow(`Aceitar ${bps / 100}%`, "proporAcordo", [BigInt(t.id), bps])]);
+    }
+    case "cor-gorjeta": {
+      const t = S.params.t;
+      const v = lerValor($("#cor-gorjeta-v").value);
+      if (v === 0n) throw new Error("Informe o valor da gorjeta");
+      return executar("Gorjeta", [{ rotulo: "Enviar gorjeta", fn: (o) => c("xBRL", true).transfer(t.trabalhador, v, o) }]);
+    }
     case "pedir-corrida":
       return pedirCorrida();
     case "cofre":

@@ -378,3 +378,40 @@ export function textoDoPonto(p) {
   const nome = [p.endereco, p.complemento].filter(Boolean).join(" · ") || "Ponto marcado no mapa";
   return `${nome}\n📍 ${fmtCoord(p.lat, p.lon)}`;
 }
+
+/**
+ * Mapa pequeno, só para ver (sem arrastar): enquadra os pontos e desenha um marcador em cada um.
+ * @param el contêiner (precisa ter largura/altura)
+ * @param pontos [{ lat, lon, icone, rotulo }]
+ */
+export function mapaFixo(el, pontos) {
+  const ok = pontos.filter((p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon));
+  if (!el || !ok.length) return;
+  const W = el.clientWidth || 320;
+  const H = el.clientHeight || 200;
+  let z = 17;
+  for (; z > ZMIN; z--) {
+    const xs = ok.map((p) => lonParaX(p.lon, z));
+    const ys = ok.map((p) => latParaY(p.lat, z));
+    if (Math.max(...xs) - Math.min(...xs) < W - 70 && Math.max(...ys) - Math.min(...ys) < H - 70) break;
+  }
+  const xs = ok.map((p) => lonParaX(p.lon, z));
+  const ys = ok.map((p) => latParaY(p.lat, z));
+  const x0 = (Math.max(...xs) + Math.min(...xs)) / 2 - W / 2;
+  const y0 = (Math.max(...ys) + Math.min(...ys)) / 2 - H / 2;
+  const n = 2 ** z;
+  const partes = [];
+  const imgs = [];
+  for (let ty = Math.floor(y0 / T); ty <= Math.floor((y0 + H) / T); ty++) {
+    if (ty < 0 || ty >= n) continue;
+    for (let tx = Math.floor(x0 / T); tx <= Math.floor((x0 + W) / T); tx++) {
+      const id = `t${tx}_${ty}`;
+      imgs.push({ id, url: TILE(z, ((tx % n) + n) % n, ty) });
+      partes.push(`<img data-t="${id}" alt="" style="transform:translate(${Math.round(tx * T - x0)}px,${Math.round(ty * T - y0)}px)">`);
+    }
+  }
+  const marcas = ok.map((p) => `<span class="mapa-marca" style="left:${Math.round(lonParaX(p.lon, z) - x0)}px;top:${Math.round(latParaY(p.lat, z) - y0)}px" title="${esc(p.rotulo || "")}">${esc(p.icone || "📍")}</span>`).join("");
+  el.classList.add("mapa-fixo");
+  el.innerHTML = `<div class="mapa-camada">${partes.join("")}</div>${marcas}<small class="mapa-credito">© OpenStreetMap</small>`;
+  for (const i of imgs) urlDoTile(i.url).then((u) => { const im = el.querySelector(`[data-t="${i.id}"]`); if (im) im.src = u; }).catch(() => {});
+}

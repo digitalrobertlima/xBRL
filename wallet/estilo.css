@@ -393,3 +393,7 @@ a.btn.whats:hover, a.btn.whats:focus-visible { background: #22bf60; }
 .detalhes-priv { padding: 10px 12px; border-left: 3px solid var(--gravura-viva); background: rgba(18, 54, 41, .6); border-radius: 0 var(--raio) var(--raio) 0; }
 .msg p a, .detalhes a, .detalhes-priv a { color: var(--ipe-claro); overflow-wrap: anywhere; }
 textarea { resize: vertical; }
+
+/* Mensagem nova / chave Pix que chegou na tela do trabalho */
+.aviso-chat.pix { border-color: var(--ipe); background: rgba(242, 184, 7, .08); }
+.aviso-chat.pix p[style] { font-family: var(--serifa, Georgia, serif); font-size: 1.05em; overflow-wrap: anywhere; }

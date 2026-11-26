@@ -647,13 +647,14 @@ setInterval(() => {
 // A vigia de fundo só usa dados PÚBLICOS (blockchain + avisador): funciona até com a carteira bloqueada.
 const dentroDaCaixaForte = () => window.parent !== window;
 const lojaOnline = () => { try { return localStorage.getItem("xbrl.loja.online") === "1"; } catch { return false; } };
-const emPlantao = () => !!(S.motorista?.online || lerViva() || lojaOnline());
+const emPlantao = () => !!(S.motorista?.online || lerViva() || lojaOnline() || S.trabalhosVivos?.lista?.length);
 
 function textoPlantao() {
   const v = lerViva();
   if (v) return `🚗 ${v.texto}`;
   if (S.motorista?.online) return "🟢 Online como motorista: avisando pedidos de corrida";
-  return "🛍️ Recebendo pedidos da sua loja / Pix";
+  if (lojaOnline()) return "🛍️ Recebendo pedidos da sua loja / Pix";
+  return "🤝 Acompanhando seus trabalhos: avisando mensagens novas";
 }
 
 function notificar(titulo, corpo = "", tag = "brls") {
@@ -722,6 +723,15 @@ async function vigiaFundo() {
         else if (x.startsWith(PREFIXO_CONTRA)) avisos.push(["💬 Contraproposta", "Um motorista propôs outro preço"]);
         else if (x.startsWith(SG.PREFIXO)) avisos.push(["📨 Pedido esperando você", "A outra parte está sem POL e pediu para você enviar"]);
       }
+    }
+  }
+  // Mensagem nova nos meus trabalhos em andamento (só o evento público; a leitura é na tela do trabalho)
+  if (S.chat && S.imp?.EscrowTrabalho) {
+    await atualizarVivos().catch(() => {});
+    for (const j of (S.trabalhosVivos?.lista || []).slice(0, 6)) {
+      const n = await S.chat.novas(idConversa(S.imp.EscrowTrabalho, j.id), eu, blocoLido(j.id)).catch(() => []);
+      if (!n.length || !novo(`m${j.id}:${n[n.length - 1].bloco}`)) continue;
+      avisos.push(ehPix(j.descricao) && !j.souCliente ? ["🔑 Chegou mensagem no seu Pix", "Pode ser a chave Pix: abra o trabalho para ver"] : ["💬 Mensagem nova", String(j.descricao).split("\n")[0].slice(0, 80)]);
     }
   }
   if (lojaOnline()) {
@@ -3009,6 +3019,7 @@ TELAS.TRABALHO = async () => {
     ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> ${pixT ? "envie sua chave Pix para quem aceitou." : "envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir."}<br><small style="white-space:pre-line">${esc(enderecoGuardado)}</small></div>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}<button class="btn prim" data-acao="enviar-endereco">${pixT ? "🔑 Enviar sua chave Pix (cifrada)" : "📍 Enviar endereço (cifrado)"}</button>` : ""}
     ${ativo && souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
 ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}` : ""}
+    ${souParte && t.trabalhador !== z ? `<div id="aviso-chat"></div>` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? `o ${NOME.trab.toLowerCase()}` : souArbitro ? "as partes" : `o ${NOME.cliente.toLowerCase()}`}</button>` : ""}
     ${ativo && souParte && t.trabalhador !== z && t.estado >= 1 && t.estado <= 3 ? blocoContato(t, souCliente) : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
@@ -3035,6 +3046,7 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
     const digitando = document.activeElement?.matches?.("input,textarea,select");
     if (fotoTrabalho(agora) !== foto && !digitando) return render();
     await mostrarCorreio($("#correio"), [agora], cor);
+    carregarAvisoChat(agora);
     if (cor) corridaViva().catch(() => {}); // mantém lembrada (para voltar depois de fechar o app)
     if (cor && agora.estado === 1) await mostrarCancelamento(agora, souCliente);
     if (cor && agora.estado === 1) {
@@ -3046,6 +3058,7 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
   const perfilMot = cor && mot ? vit()?.motorista(mot) : null;
   if (perfilMot?.fotos?.length) vit().fotos(perfilMot).then((u) => { const b = $("#cor-foto-mot"); if (b && u[0]) b.innerHTML = `<img src="${u[0]}" alt="Foto do motorista">`; }).catch(() => {});
   if ($("#rota")) carregarRota(t);
+  carregarAvisoChat(t);
   if ($("#contato") && S.chat) {
     // Contato: chega cifrado pelo avisador; o meu é reenviado a cada 6 h (o avisador guarda por 12 h)
     const f = lerFicha(t.id);
@@ -3229,6 +3242,44 @@ function iconeDesc(descricao, m) {
   return e && !d.startsWith("📍") ? [esc(e[1]), d.slice(e[0].length)] : [m.icone, d];
 }
 
+// ---------- Aviso de mensagem nova no trabalho (e chave Pix que chegou) ----------
+const chaveLido = (id) => `xbrl.chat.lido.${S.chainId}.${id}`;
+const blocoLido = (id) => { try { return Number(localStorage.getItem(chaveLido(id))) || 0; } catch { return 0; } };
+async function marcarLido(id) {
+  try { localStorage.setItem(chaveLido(id), String(await S.provider.getBlockNumber())); } catch { /* sem armazenamento */ }
+}
+const ehPix = (d) => String(d || "").startsWith("💱");
+const RE_CHAVE_PIX = /🔑\s*Chave:\s*(.+)/;
+let chavePixRecebida = "";
+
+/** Na tela do trabalho: mostra "mensagem nova" e, no Pix, a chave que o cliente mandou (com botão copiar). */
+async function carregarAvisoChat(t) {
+  const box = $("#aviso-chat");
+  if (!box || !S.chat) return;
+  const eu = S.endereco.toLowerCase();
+  const souTrab = t.trabalhador.toLowerCase() === eu;
+  const pix = ehPix(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao) && souTrab && t.estado === 1;
+  try {
+    const msgs = await S.chat.ler(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira);
+    if (!box.isConnected) return;
+    const lido = blocoLido(t.id);
+    const deles = msgs.filter((m) => m.de.toLowerCase() !== eu);
+    const novas = deles.filter((m) => m.bloco > lido);
+    const m = pix ? [...deles].reverse().find((x) => RE_CHAVE_PIX.test(x.texto)) : null;
+    if (m) {
+      chavePixRecebida = RE_CHAVE_PIX.exec(m.texto)[1].trim();
+      const nova = m.bloco > lido;
+      box.innerHTML = `<div class="cartao aviso-chat pix"><h2 style="margin-top:0">🔑 A chave Pix chegou${nova ? " · nova" : ""}</h2><p style="white-space:pre-line">${esc(m.texto)}</p>
+        <button class="btn prim" data-acao="copiar-pix">📋 Copiar chave Pix</button><p class="mudo">Faça o Pix pelo app do seu banco, no valor combinado. O BRLS só é liberado depois que o dinheiro cair na conta de quem mandou a chave.</p></div>`;
+      if (nova) { toast("🔑 A chave Pix chegou!"); marcarLido(t.id); }
+    } else if (pix) {
+      box.innerHTML = `<p class="mudo aviso-chat">⏳ Esperando a chave Pix de quem travou os BRLS. Quando ela chegar, aparece aqui e você recebe um aviso.</p>`;
+    } else if (novas.length) {
+      box.innerHTML = `<div class="aviso aviso-chat">💬 <b>${novas.length > 1 ? `${novas.length} mensagens novas` : "Mensagem nova"}</b> nesta conversa.</div>`;
+    } else box.innerHTML = "";
+  } catch { /* conversa ainda não ativada */ }
+}
+
 /** Trabalhador/motorista: os pontos exatos (que chegaram cifrados na conversa) com botões de GPS. */
 async function carregarRota(t) {
   if (!S.chat) return;
@@ -3237,6 +3288,7 @@ async function carregarRota(t) {
     const m = [...msgs].reverse().find((x) => x.de.toLowerCase() === t.cliente.toLowerCase() && coordenadasNoTexto(x.texto).length);
     const box = $("#rota");
     if (!box) return;
+    if (ehPix(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao)) { box.innerHTML = ""; return; } // Pix: não há endereço, a chave aparece no aviso
     box.innerHTML = m
       ? `<div class="cartao rota"><h2 style="margin-top:0">🧭 Ir até lá</h2><p class="mudo" style="white-space:pre-line">${esc(m.texto)}</p>${botoesGps(m.texto, rotulosPontos(m.texto))}</div>`
       : `<p class="mudo">📍 Assim que ${lerCorrida(S.escrow.resumoTrabalhos().get(String(t.id))?.descricao) ? "o passageiro" : "o cliente"} mandar o endereço (cifrado), os botões de GPS aparecem aqui.</p>`;
@@ -3780,7 +3832,11 @@ async function acao(nome, el) {
     case "scan-devolucao":
       return escanearQR("#tr-dev");
     case "abrir-chat":
+      marcarLido(S.params.t.id);
       return ir("CHAT", { t: S.params.t });
+    case "copiar-pix":
+      try { await navigator.clipboard.writeText(chavePixRecebida); } catch { /* sem permissão */ }
+      return toast("Chave Pix copiada");
     case "chat-atualizar":
       return render();
     case "chat-voltar":

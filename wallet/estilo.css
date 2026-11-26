@@ -278,3 +278,9 @@ body.com-mapa { overflow: hidden; }
 .gps-botoes { display: flex; flex-wrap: wrap; gap: 6px; }
 .btn.mini { width: auto; margin: 0; padding: 8px 12px; min-height: 40px; font-size: 14px; display: inline-flex; align-items: center; text-decoration: none; }
 .correio.destaque { border: 2px solid var(--ipe); }
+
+/* ---------- Trabalhos arquivados ---------- */
+.arquivados { margin-top: 18px; }
+.arquivados summary { cursor: pointer; padding: 12px 4px; font-weight: 600; }
+.arquivados summary small { font-weight: 400; margin-left: 6px; }
+.item.arquivado { opacity: .72; border-style: dashed; }

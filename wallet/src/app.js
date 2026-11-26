@@ -1110,12 +1110,13 @@ TELAS.TRABALHOS = async () => {
     const t = $("#sinc-txt");
     if (t) t.textContent = `Lendo a blockchain… bloco ${bloco.toLocaleString("pt-BR")} de ${atual.toLocaleString("pt-BR")}`;
   });
-  const [{ meus, vagas, arbitragens }, rep] = await Promise.all([S.escrow.listar(S.endereco), S.escrow.reputacao(S.endereco)]);
+  const [{ meus, vagas, arbitragens, arquivados }, rep] = await Promise.all([S.escrow.listar(S.endereco), S.escrow.reputacao(S.endereco)]);
   const lista = { meus, vagas, arbitragens }[aba] || meus;
   const card = (t) => {
     const m = ESCROW.modalidades[t.modalidade];
     const papel = t.cliente.toLowerCase() === S.endereco.toLowerCase() ? "Você contratou" : t.trabalhador.toLowerCase() === S.endereco.toLowerCase() ? "Você trabalha" : aba === "arbitragens" ? "Você é árbitro" : "Vaga aberta";
-    return `<button class="item" data-trabalho="${esc(t.id)}"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">#${esc(t.id)} · ${esc(m.nome)} · ${esc(papel)}</span></span><b>${fmt(t.valor)}</b></button>`;
+    const fim = { cancelado: "↩️ Cancelado, valor devolvido", concluido: "✅ Concluído e pago", resolvido: "⚖️ Disputa resolvida" }[t.fim];
+    return `<button class="item ${t.encerrado ? "arquivado" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">#${esc(t.id)} · ${fim ? esc(fim) : `${esc(m.nome)} · ${esc(papel)}`}</span></span><b>${fmt(t.valor)}</b></button>`;
   };
   tela(`
     <h1>Trabalhos</h1>
@@ -1125,7 +1126,8 @@ TELAS.TRABALHOS = async () => {
     <div class="grade duas"><button class="atalho" data-ir="CORRIDA"><span>🙋</span>Pedir corrida</button><button class="atalho" data-ir="MOTORISTA"><span>🚗</span>Quero dirigir</button></div>
     ${S.imp?.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás (de quem está sem POL)</button>` : ""}
     <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas (${vagas.length})</button>${arbitragens.length ? `<button data-acao="aba-arbitragens" aria-pressed="${aba === "arbitragens"}">⚖️ Árbitro (${arbitragens.length})</button>` : ""}</div>
-    ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
+    ${lista.map(card).join("") || `<p class="mudo">${aba === "meus" && arquivados.length ? "Nenhum trabalho em andamento." : "Nada por aqui ainda."}</p>`}
+    ${aba === "meus" && arquivados.length ? `<details class="arquivados"><summary>📁 Arquivados (${arquivados.length}) <small class="mudo">cancelados e concluídos</small></summary>${arquivados.map(card).join("")}</details>` : ""}`);
 };
 
 // ---------- Ponto exato no mapa (mapa.js) ----------
@@ -1375,9 +1377,10 @@ TELAS.TRABALHO = async () => {
   const acoes = S.escrow.acoesPossiveis(t, S.endereco).filter((a) => !(cor && a === "confirmarChegada"));
   const [rc, rt] = await Promise.all([S.escrow.reputacao(t.cliente), t.trabalhador !== E.ZeroAddress ? S.escrow.reputacao(t.trabalhador) : null]);
   const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
-  const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
-  const chegada = !cor && souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
-  const devolucao = souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
+  const ativo = t.estado < 4; // 4 = concluído, 5 = cancelado: arquivado, sem códigos nem QR
+  const codigo = ativo && souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
+  const chegada = ativo && !cor && souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
+  const devolucao = ativo && souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
   const meuPol = await S.provider.getBalance(S.endereco).catch(() => 10n ** 18n);
   const semPol = meuPol < 10n ** 16n && !!S.imp.Encaminhador;
   const chaveEnd = t.modalidade === 0 ? t.chegadaHash : t.codigoHash;
@@ -1418,6 +1421,7 @@ TELAS.TRABALHO = async () => {
     <p class="mudo">#${esc(t.id)} · ${cor.veiculo === "moto" ? "Moto" : "Carro"}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
     <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>` : `<h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
+    ${!ativo ? `<div class="ok">📁 <b>Arquivado.</b> ${t.estado === 5 ? "Cancelado: o valor travado voltou para a carteira de quem contratou." : "Concluído: o pagamento já foi feito."} Os códigos deste trabalho não valem mais.</div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Valor</span><b>${fmt(t.valor)} BRLS</b></div>
       <div class="linha"><span>Já pago</span><b>${fmt(t.pago)} BRLS</b></div>
@@ -1441,7 +1445,7 @@ TELAS.TRABALHO = async () => {
     ${!souCliente && t.trabalhador.toLowerCase() === S.endereco.toLowerCase() && t.estado === 1 ? `<div id="rota"></div>` : ""}
     ${S.imp.Encaminhador && !souCliente ? "" : S.imp.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás da outra pessoa</button>` : ""}
     ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small style="white-space:pre-line">${esc(enderecoGuardado)}</small></div>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}<button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
-    ${souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
+    ${ativo && souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
 ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? `o ${NOME.trab.toLowerCase()}` : souArbitro ? "as partes" : `o ${NOME.cliente.toLowerCase()}`}</button>` : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}

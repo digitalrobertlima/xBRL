@@ -7,7 +7,7 @@ import { ABIS } from "./abis.js";
 
 export { ABIS };
 
-export const VERSAO = "3.1.1";
+export const VERSAO = "3.1.2";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
 export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 
@@ -50,6 +50,7 @@ export const REDES = {
       intermediarios: [
         "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", // USDC
         "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", // USDT
+        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", // USDC.e (antigo, ainda com muito dinheiro)
         "0x4eD141110F6EeeAbA9A1df36d8c26f684d2475Dc", // BRZ
         "0xE6A537a407488807F0bbeb0038B79004f19DDDFb", // BRLA
         "0x5C067C80C00eCd2345b05E83A3e758eF799C40B5", // BRL1

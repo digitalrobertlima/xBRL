@@ -331,3 +331,9 @@ label.check input { width: 22px; height: 22px; margin: 2px 0 0; flex: none; }
 #faixa-viva:focus-visible { outline: 3px solid var(--ipe-claro); outline-offset: 2px; }
 .viva-bloqueada { margin: 14px 0; }
 body:has(#faixa-viva) #tela { padding-bottom: 84px; }
+
+/* ---------- Sabores / variações e adicionais ---------- */
+fieldset.escolhas { border: 1px solid rgba(62, 125, 102, .55); border-radius: var(--raio); padding: 6px 12px 10px; margin: 10px 0; }
+fieldset.escolhas legend { padding: 0 6px; font-weight: 600; }
+fieldset.escolhas label.check { margin: 8px 0; align-items: center; }
+.sacola-atalho { grid-template-columns: 1fr auto; gap: 8px; } .sacola-atalho .btn { margin: 6px 0; }

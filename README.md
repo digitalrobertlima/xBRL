@@ -1,5 +1,7 @@
 # BRLS — Real Soberano (Polygon)
 
+> 📄 **[White paper](WHITEPAPER.md)** · 🧪 **[Beta e checklist de produção](BETA.md)**
+
 **1 BRLS = R$ 1**, lastreado em stablecoins de Real (BRZ, BRLA, BRL1) ou em cripto supercolateralizada (ETH, POL). Sem congelamento, sem confisco, sem servidor. Com marketplace de trabalho: o pagamento fica travado em contrato até o serviço ser cumprido.
 
 - 🌐 Site: https://digitalrobertlima.github.io/xBRL

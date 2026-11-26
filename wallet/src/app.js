@@ -546,6 +546,100 @@ setInterval(() => {
   if (S.carteira && !document.hidden) corridaViva().then(desenharFaixaViva).catch(() => {});
 }, 30_000);
 
+// ---------- Avisos de verdade (com o app em segundo plano) e plantão ----------
+// "Plantão" = há algo que precisa de aviso: corrida em andamento, motorista online, loja/caixa recebendo
+// pedidos. No APK, a Caixa Forte liga um aviso fixo que mantém o app vivo; no navegador, a aba aberta basta.
+// A vigia de fundo só usa dados PÚBLICOS (blockchain + avisador): funciona até com a carteira bloqueada.
+const dentroDaCaixaForte = () => window.parent !== window;
+const lojaOnline = () => { try { return localStorage.getItem("xbrl.loja.online") === "1"; } catch { return false; } };
+const emPlantao = () => !!(S.motorista?.online || lerViva() || lojaOnline());
+
+function textoPlantao() {
+  const v = lerViva();
+  if (v) return `🚗 ${v.texto}`;
+  if (S.motorista?.online) return "🟢 Online como motorista: avisando pedidos de corrida";
+  return "🛍️ Recebendo pedidos da sua loja / Pix";
+}
+
+function notificar(titulo, corpo = "", tag = "brls") {
+  if (!document.hidden) return; // com o app na tela, o toast + som bastam
+  if (dentroDaCaixaForte()) return window.parent.postMessage({ brls: 1, tipo: "notificar", titulo, corpo }, "*");
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const op = { body: corpo, tag, icon: "./icons/icon-192.png", badge: "./icons/icon-192.png", renotify: true };
+    if (navigator.serviceWorker?.controller) navigator.serviceWorker.ready.then((r) => r.showNotification(titulo, op)).catch(() => {});
+    else new Notification(titulo, op);
+  } catch { /* sem avisos neste aparelho */ }
+}
+
+async function pedirAvisos() {
+  try {
+    if (dentroDaCaixaForte()) return true; // a Caixa Forte pede a permissão dela
+    if (!("Notification" in window)) return false;
+    if (Notification.permission === "default") await Notification.requestPermission();
+    return Notification.permission === "granted";
+  } catch { return false; }
+}
+
+function atualizarPlantao() {
+  const liga = emPlantao();
+  const texto = liga ? textoPlantao() : "";
+  if (S.plantaoEnviado === `${liga}|${texto}`) return;
+  S.plantaoEnviado = `${liga}|${texto}`;
+  if (dentroDaCaixaForte()) window.parent.postMessage({ brls: 1, tipo: "plantao", liga, texto }, "*");
+}
+
+/** Vigia de fundo: com o app escondido e em plantão, confere o que mudou e notifica. */
+async function vigiaFundo() {
+  atualizarPlantao();
+  if (!document.hidden || !emPlantao() || !S.escrow) return;
+  const eu = String(S.endereco || K.enderecoSalvo() || "").toLowerCase();
+  if (!eu) return;
+  await S.escrow.sincronizar();
+  const V = (S.fundo ||= { pronto: false, ids: new Set(), passos: new Map(), textos: new Set() });
+  const avisos = [];
+  const novo = (chave) => { if (V.ids.has(chave)) return false; V.ids.add(chave); return V.pronto; };
+  const agoraS = agora();
+  for (const t of S.escrow.resumoTrabalhos().values()) {
+    if (t.encerrado) continue;
+    const cor = lerCorrida(t.descricao);
+    if (S.motorista?.online && cor && t.trabalhador === E.ZeroAddress && !t.candidato && Number(t.prazo) > agoraS && novo(`v${t.id}`)) {
+      avisos.push([`🚗 Corrida: ${cor.de} → ${cor.para}`, `R$ ${fmt(t.valor)} · ${cor.nomeCategorias}${cor.km != null ? ` · ${brNum(cor.km, 1)} km` : ""}`]);
+    }
+    if (t.trabalhador?.toLowerCase() === eu && t.cliente.toLowerCase() !== eu && novo(`d${t.id}`)) {
+      avisos.push([cor ? "🚗 Corrida para você" : "🛍️ Novo pedido para você", String(t.descricao).slice(0, 120)]);
+    }
+  }
+  const v = lerViva();
+  if (v) {
+    const t = await S.escrow.detalhe(v.id).catch(() => null);
+    if (t) {
+      const texto = passoCorrida(t, t.cliente.toLowerCase() === eu).texto;
+      if (V.passos.has(v.id) && V.passos.get(v.id) !== texto) avisos.push(["🚗 Sua corrida", texto]);
+      V.passos.set(v.id, texto);
+      if (t.estado >= 4) corridaViva().catch(() => {});
+      const textos = await CO.ler(S.chainId, S.imp.EscrowTrabalho, t.id).catch(() => []);
+      const extras = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "1h", "brls").catch(() => []);
+      for (const x of [...textos, ...extras]) {
+        if (x.startsWith(PREFIXO_LOC) || !novo(`x${E.id(x)}`)) continue;
+        if (x.startsWith(PREFIXO_CANCEL_NAO)) avisos.push(["🚗 Corrida", "O motorista recusou o cancelamento"]);
+        else if (x.startsWith(PREFIXO_CANCEL)) avisos.push(["🚗 Corrida", "O passageiro pediu para cancelar"]);
+        else if (x.startsWith(PREFIXO_CONTRA)) avisos.push(["💬 Contraproposta", "Um motorista propôs outro preço"]);
+        else if (x.startsWith(SG.PREFIXO)) avisos.push(["📨 Pedido esperando você", "A outra parte está sem POL e pediu para você enviar"]);
+      }
+    }
+  }
+  if (lojaOnline()) {
+    const pix = await CO.lerTopico(CO.topicoDe(S.chainId, eu, "pix"), "1h", PREFIXO_P2P).catch(() => []);
+    for (const x of pix) if (novo(`p${E.id(x)}`)) avisos.push(["💱 Pedido de compra de BRLS", "Alguém quer comprar BRLS com Pix"]);
+  }
+  V.pronto = true;
+  for (const [a, b] of avisos.slice(0, 4)) notificar(a, b, a);
+  if (avisos.length) try { navigator.vibrate?.([200, 100, 200]); } catch { /* ok */ }
+}
+setInterval(() => vigiaFundo().catch(() => {}), 20_000);
+document.addEventListener("visibilitychange", () => { if (document.hidden) vigiaFundo().catch(() => {}); });
+
 /** Mantém a tela do celular acesa durante a corrida e enquanto o motorista está online. */
 async function telaAcesa(liga) {
   // No APK (Tor) a janela não tem Wake Lock: pede à Caixa Forte para manter a tela acesa
@@ -1233,7 +1327,7 @@ TELAS.TRABALHOS = async () => {
     <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
       ${resumoReputacao(rep)}</div>
     <button class="btn prim" data-ir="TRABALHO_NOVO">+ Contratar alguém</button>
-    <div class="grade duas"><button class="atalho" data-ir="CORRIDA"><span>🙋</span>Pedir corrida</button><button class="atalho" data-ir="MOTORISTA"><span>🚗</span>Quero dirigir</button></div>
+    <button class="btn sec" data-acao="oferecer-servico">🧰 Oferecer um serviço</button>
     ${S.imp?.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás (de quem está sem POL)</button>` : ""}
     <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas (${vagas.length})</button>${arbitragens.length ? `<button data-acao="aba-arbitragens" aria-pressed="${aba === "arbitragens"}">⚖️ Árbitro (${arbitragens.length})</button>` : ""}</div>
     ${lista.map(card).join("") || `<p class="mudo">${aba === "meus" && arquivados.length ? "Nenhum trabalho em andamento." : "Nada por aqui ainda."}</p>`}
@@ -1310,7 +1404,7 @@ TELAS.VITRINE = async () => {
     <h1>🛍️ Vitrine</h1>
     <div class="cats" role="group" aria-label="Categorias">${CATEGORIAS.map((x) => `<button data-acao="vit-cat-${x.id}" aria-pressed="${x.id === f.cat}"><span>${x.icone}</span>${esc(x.nome)}</button>`).join("")}</div>
     <input id="vit-busca" type="search" placeholder="Procurar: pizza, bicicleta, diarista…" value="${esc(f.busca)}" aria-label="Procurar na vitrine">
-    ${sacola.itens.length ? `<button class="btn prim" data-ir="SACOLA">🛍️ Ver sacola · ${sacola.itens.reduce((s, i) => s + i.qtd, 0)} ${sacola.itens.length === 1 && sacola.itens[0].qtd === 1 ? "item" : "itens"} · ${reaisTxt(totalSacola(sacola))}</button>` : ""}
+    ${sacola.itens.length ? `<div class="grade sacola-atalho"><button class="btn prim" data-ir="SACOLA">🛍️ Ver sacola · ${sacola.itens.reduce((s, i) => s + i.qtd, 0)} ${sacola.itens.length === 1 && sacola.itens[0].qtd === 1 ? "item" : "itens"} · ${reaisTxt(totalSacola(sacola))}</button><button class="btn sec" data-acao="sac-limpar" aria-label="Limpar sacola">🗑️</button></div>` : ""}
     <div id="vit-lista"><div class="cartao"><div class="giro"></div><p class="mudo">Lendo a vitrine na blockchain…</p></div></div>
     <div class="grade duas"><button class="atalho" data-ir="ANUNCIAR"><span>➕</span>Anunciar</button><button class="atalho" data-ir="MEUS_ANUNCIOS"><span>🗂️</span>Meus anúncios e loja</button></div>
     <p class="mudo">Os anúncios ficam na blockchain: ninguém apaga nem censura. Só quem anunciou pode editar, pausar ou encerrar. O dinheiro de cada compra fica travado no contrato até a entrega (código).</p>`);
@@ -1390,7 +1484,7 @@ TELAS.ANUNCIO = async () => {
       : `<p class="preco">${a.preco ? esc(reaisTxt(a.preco)) : "Preço a combinar"}</p>`}
     ${a.desc ? `<p style="white-space:pre-line">${esc(a.desc)}</p>` : ""}
     ${a.specs?.length ? `<div class="cartao specs">${a.specs.map(([n, v]) => `<div class="linha"><span>${esc(n)}</span><b>${esc(v)}</b></div>`).join("")}</div>` : ""}
-    ${a.opcoes?.length ? `<div class="cartao"><b>Opções</b>${a.opcoes.map((o) => `<div class="linha"><span>${esc(o.nome)}</span><span>${Number(o.extra) > 0 ? "+ " + esc(reaisTxt(o.extra)) : "sem custo"}</span></div>`).join("")}</div>` : ""}
+    ${meu && (a.variacoes?.length || a.opcoes?.length) ? `<div class="cartao">${a.variacoes?.length ? `<b>${a.cat === "comida" ? "Sabores" : "Variações"}</b>${a.variacoes.map((o) => `<div class="linha"><span>${esc(o.nome)}</span><span>${Number(o.extra) ? esc(reaisTxt(o.extra)) : "—"}</span></div>`).join("")}` : ""}${a.opcoes?.length ? `<b>Adicionais</b>${a.opcoes.map((o) => `<div class="linha"><span>${esc(o.nome)}</span><span>${Number(o.extra) > 0 ? "+ " + esc(reaisTxt(o.extra)) : "sem custo"}</span></div>`).join("")}` : ""}</div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Onde</span><span>${esc(a.bairro || "—")}</span></div>
       ${a.cat !== "pix" && a.cat !== "servicos" ? `<div class="linha"><span>Entrega</span><span>${esc(ENTREGAS[a.entrega])}</span></div>` : ""}
@@ -1434,7 +1528,7 @@ function desenharAcaoAnuncio(a) {
     });
   } else if (a.cat === "comida") {
     box.innerHTML = `<div class="cartao">
-      ${a.opcoes?.length ? `<label for="an-opcao">Opção</label><select id="an-opcao"><option value="">Sem opção</option>${a.opcoes.map((o, i) => `<option value="${i}">${esc(o.nome)}${Number(o.extra) > 0 ? ` (+ ${esc(reaisTxt(o.extra))})` : ""}</option>`).join("")}</select>` : ""}
+      ${camposEscolha(a)}
       <label for="an-qtd">Quantidade</label><input id="an-qtd" inputmode="numeric" value="1">
       <label for="an-obs">Observação (opcional)</label><input id="an-obs" maxlength="40" placeholder="Ex.: sem cebola">
       <button class="btn prim" data-acao="an-sacola">🛍️ Adicionar à sacola</button></div>`;
@@ -1447,6 +1541,7 @@ function desenharAcaoAnuncio(a) {
       <p class="mudo">O valor fica travado no contrato. ${a.servico === "presencial" ? "Na chegada, você confirma; no fim, libera o pagamento." : "Quando ficar pronto, você libera o pagamento."}</p></div>`;
   } else {
     box.innerHTML = `<div class="cartao"><h2 style="margin-top:0">Comprar</h2>
+      ${camposEscolha(a)}
       <label for="an-qtd">Quantidade</label><input id="an-qtd" inputmode="numeric" value="1">
       ${a.entrega === "combinar" ? `<p class="mudo">Retirada ou entrega a combinar pela conversa cifrada, depois que o vendedor aceitar.</p>` : botaoPonto("📍 Onde entregar", S.params.ponto, "an-mapa")}
       ${botaoSegurar("travar o pagamento e comprar", "an-comprar")}
@@ -1459,14 +1554,15 @@ async function comprarAnuncio(servico) {
   const a = vit().item(S.params.chave);
   const pt = S.params.ponto;
   const qtd = servico ? 1 : Math.max(1, Math.min(99, Number($("#an-qtd")?.value) || 1));
-  const valor = servico ? lerValor($("#an-valor").value) : lerValor(a.preco || "0") * BigInt(qtd);
+  const escolha = servico ? { variacao: "", adicionais: [], extra: "0" } : lerEscolhas(a);
+  const valor = servico ? lerValor($("#an-valor").value) : lerValor((Number(a.preco || 0) + Number(escolha.extra)).toFixed(2)) * BigInt(qtd);
   if (valor === 0n) throw new Error("Informe o valor");
   const precisaPonto = servico ? a.servico === "presencial" : a.entrega !== "combinar";
   if (precisaPonto && !pt) throw new Error("Marque no mapa o endereço exato");
   const kit = E.parseEther("0.3");
   await conferirSaldos(valor, kit);
   const mod = servico ? (a.servico === "presencial" ? 0 : 2) : 1;
-  const desc = `${servico ? "🧰" : "🛍️"} ${a.titulo}${qtd > 1 ? ` ×${qtd}` : ""} · ref ${refAnuncio(a)}`;
+  const desc = `${servico ? "🧰" : "🛍️"} ${a.titulo}${textoEscolhas(escolha) ? ` (${textoEscolhas(escolha)})` : ""}${qtd > 1 ? ` ×${qtd}` : ""} · ref ${refAnuncio(a)}`;
   const privado = pt ? `${servico ? "Local do serviço" : "Entregar em"}: ${textoDoPonto(pt)}` : "";
   const horas = servico ? Math.max(1, Math.min(365, Number($("#an-dias").value) || 7)) * 24 : 72;
   const { p, codigo, chegada } = prepararTrabalho({ modalidade: mod, trabalhador: E.getAddress(a.de), valor, horas, descricao: desc, comCodigo: !servico, privado });
@@ -1512,9 +1608,14 @@ TELAS.ANUNCIAR = async () => {
       <label for="na-desc">Descrição</label><textarea id="na-desc" maxlength="900" placeholder="Conte tudo: estado, o que vem junto, defeitos, como funciona…">${esc(a.desc || "")}</textarea>
       <h2>Especificações</h2><div id="na-specs">${specs.map(([n, v]) => linhaSpec(n, v)).join("")}</div>
       <button class="btn sec" data-acao="na-spec-mais">+ Especificação</button>
-      ${cat === "comida" ? `<h2>Opções e adicionais</h2><div id="na-opcoes">${(a.opcoes.length ? a.opcoes : []).map((o) => linhaOpcao(o.nome, o.extra)).join("")}</div><button class="btn sec" data-acao="na-opcao-mais">+ Opção (ex.: bacon + R$ 4,00)</button>` : ""}
+      ${cat !== "servicos" ? `<h2>${cat === "comida" ? "Sabores" : "Variações"} <small class="mudo">(o cliente escolhe uma)</small></h2>
+      <p class="mudo">${cat === "comida" ? "Ex.: pastel de carne, queijo, frango, pizza, banana; caldo com limão ou sem limão. Diferença de preço é opcional." : "Ex.: tamanho P, M, G; cor azul ou preta. Diferença de preço é opcional."}</p>
+      <div id="na-vars">${(a.variacoes?.length ? a.variacoes : []).map((o) => linhaVar(o.nome, o.extra)).join("")}</div><button class="btn sec" data-acao="na-var-mais">+ ${cat === "comida" ? "Sabor" : "Variação"}</button>
+      <h2>Adicionais <small class="mudo">(opcional, o cliente marca quantos quiser)</small></h2><div id="na-opcoes">${(a.opcoes?.length ? a.opcoes : []).map((o) => linhaOpcao(o.nome, o.extra)).join("")}</div><button class="btn sec" data-acao="na-opcao-mais">+ Adicional (ex.: bacon + R$ 4,00)</button>` : ""}
       ${cat === "servicos" ? `<label for="na-servico">Como é o serviço</label><select id="na-servico"><option value="presencial" ${a.servico !== "remoto" ? "selected" : ""}>No local (presencial)</option><option value="remoto" ${a.servico === "remoto" ? "selected" : ""}>À distância</option></select>`
-        : cat !== "comida" ? `<label for="na-entrega">Entrega</label><select id="na-entrega">${Object.entries(ENTREGAS).filter(([k]) => k !== "entregador").map(([k, n]) => `<option value="${k}" ${k === a.entrega ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : `<p class="mudo">A entrega dos pratos segue o que você escolheu no perfil da loja (Meus anúncios e loja).</p>`}
+        : `<label for="na-entrega">Entrega</label><select id="na-entrega">${Object.entries(ENTREGAS).filter(([k]) => k !== "entregador").map(([k, n]) => `<option value="${k}" ${k === a.entrega ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+          <label for="na-taxa">Taxa de entrega (R$, se você entrega)</label><input id="na-taxa" inputmode="decimal" placeholder="0,00" value="${Number(a.taxaEntrega) ? esc(precoBr(a.taxaEntrega)) : ""}">
+          ${cat === "comida" ? `<p class="mudo">Não precisa criar loja. Se criar o perfil de loja (com entregador da rede, horário e foto), vale o que estiver no perfil.</p>` : ""}`}
       <h2>Fotos (até 3)</h2><input id="na-fotos" type="file" accept="image/*" multiple><div id="na-prev" class="fotos mini"></div>
       <p class="mudo">As fotos são diminuídas no celular para caber na blockchain.${ed?.fotos?.length ? " Sem escolher fotos novas, as atuais continuam." : ""}</p>`}
     <label for="na-bairro">Bairro e cidade (público)</label><input id="na-bairro" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(a.bairro || "")}">
@@ -1531,6 +1632,7 @@ TELAS.ANUNCIAR = async () => {
 };
 
 const linhaSpec = (n = "", v = "") => `<div class="spec"><input class="spec-n" maxlength="30" placeholder="Nome" value="${esc(n)}"><input class="spec-v" maxlength="80" placeholder="Valor" value="${esc(v)}"></div>`;
+const linhaVar = (n = "", v = "") => `<div class="spec"><input class="var-n" maxlength="40" placeholder="Ex.: Carne" value="${esc(n)}"><input class="var-v" inputmode="decimal" placeholder="+ R$ (opcional)" value="${v && Number(v) ? esc(precoBr(v)) : ""}"></div>`;
 const linhaOpcao = (n = "", v = "") => `<div class="spec"><input class="op-n" maxlength="40" placeholder="Opção" value="${esc(n)}"><input class="op-v" inputmode="decimal" placeholder="+ R$" value="${v && Number(v) > 0 ? esc(precoBr(v)) : ""}"></div>`;
 const valorDecimal = (txt) => {
   const s = String(txt || "").trim();
@@ -1556,7 +1658,9 @@ async function publicarAnuncio() {
     o.desc = ler("na-desc");
     o.specs = $$("#na-specs .spec").map((d) => [d.querySelector(".spec-n").value, d.querySelector(".spec-v").value]);
     o.opcoes = $$("#na-opcoes .spec").map((d) => ({ nome: d.querySelector(".op-n").value, extra: valorDecimal(d.querySelector(".op-v").value) || "0" }));
-    o.entrega = cat === "comida" ? "propria" : ler("na-entrega") || "combinar";
+    o.variacoes = $$("#na-vars .spec").map((d) => ({ nome: d.querySelector(".var-n").value, extra: valorDecimal(d.querySelector(".var-v").value) || "0" }));
+    o.entrega = ler("na-entrega") || "combinar";
+    o.taxaEntrega = o.entrega === "propria" ? valorDecimal(ler("na-taxa")) || "0" : "0";
     if (cat === "servicos") o.servico = ler("na-servico") || "presencial";
   }
   let itens;
@@ -1603,6 +1707,7 @@ TELAS.MEUS_ANUNCIOS = async () => {
     ${pedidos.length ? `<h2>Pedidos para você</h2>${pedidos.map((t) => `<button class="item" data-trabalho="${esc(t.id)}"><span class="ic">${esc([...t.descricao][0])}</span><span class="meio"><b>${esc(t.descricao.slice(2))}</b><span class="mudo">#${esc(t.id)} · toque para ver</span></span><b>${fmt(t.valor)}</b></button>`).join("")}` : ""}
     ${meus.some((a) => a.cat === "pix") ? `<button class="btn sec" data-acao="pix-colar-pedido">📋 Colar um pedido Pix recebido por mensagem</button>` : ""}
     <div id="vit-correio"></div>
+    <button class="btn ${lojaOnline() ? "perigo" : "prim"}" data-acao="loja-online">${lojaOnline() ? "🔕 Parar de receber pedidos em segundo plano" : "🔔 Receber pedidos com aviso (também com o app em segundo plano)"}</button>
     <h2>🏪 Sua loja ${loja ? `<small class="mudo">${esc(STATUS[loja.status])}</small>` : ""}</h2>
     <p class="mudo">Para vender comida com cardápio, crie o perfil da loja. Seus pratos (categoria Comida) aparecem nela.</p>
     <button class="btn sec" data-ir="LOJA_EDITAR">${loja ? "✏️ Editar a loja" : "🏪 Criar minha loja"}</button>
@@ -1668,8 +1773,9 @@ async function publicarLoja() {
 }
 
 TELAS.LOJA = async () => {
-  const l = vit().loja(S.params.conta);
-  if (!l) return tela(`<h1>Loja</h1><div class="aviso">Loja não encontrada.</div><button class="btn sec" data-ir="VITRINE">Voltar</button>`);
+  await vit().sincronizar().catch(() => {});
+  const l = lojaDe(S.params.conta);
+  if (!l) return tela(`<h1>Loja</h1><div class="aviso">Esta pessoa não tem nada à venda agora.</div><button class="btn sec" data-ir="VITRINE">Voltar</button>`);
   const pratos = vit().anuncios({ cat: "comida", de: l.de });
   const rep = await S.escrow.reputacao(l.de).catch(() => null);
   const sacola = lerSacola();
@@ -1679,13 +1785,50 @@ TELAS.LOJA = async () => {
     <p class="mudo">${esc(l.bairro)}${l.horario ? ` · ${esc(l.horario)}` : ""} · ${rep ? `${estrelasNivel(rep.nivel)} ${esc(rep.nomeNivel)}` : ""}</p>
     ${l.status !== "ativo" ? `<div class="aviso">A loja está fechada agora.</div>` : ""}
     ${l.desc ? `<p style="white-space:pre-line">${esc(l.desc)}</p>` : ""}
-    <div class="cartao"><div class="linha"><span>Entrega</span><b>${l.entrega === "entregador" ? "Entregador da rede" : "A própria loja"} · ${Number(l.taxa) > 0 ? esc(reaisTxt(l.taxa)) : "grátis"}</b></div></div>
+    <div class="cartao"><div class="linha"><span>Entrega</span><b>${l.entrega === "entregador" ? "Entregador da rede" : l.entrega === "combinar" ? "Retirar ou combinar" : "O vendedor entrega"}${l.entrega === "combinar" ? "" : ` · ${Number(l.taxa) > 0 ? esc(reaisTxt(l.taxa)) : "grátis"}`}</b></div></div>
     <h2>Cardápio</h2>${pratos.map(cartaoAnuncio).join("") || `<p class="mudo">Cardápio vazio.</p>`}
     ${sacola.itens.length && sacola.loja?.toLowerCase() === l.de.toLowerCase() ? `<button class="btn prim" data-ir="SACOLA">🛍️ Ver sacola · ${esc(reaisTxt(totalSacola(sacola)))}</button>` : ""}
     <button class="btn sec" data-ir="VITRINE">Voltar à vitrine</button>`);
   carregarMiniaturas($("#tela"));
   vit().fotos(l).then((urls) => { const b = $("#lj-fotos"); if (b && urls.length) b.innerHTML = `<img src="${urls[0]}" alt="Foto da loja">`; }).catch(() => {});
 };
+
+/** Loja de quem vende: o perfil publicado ou, se a pessoa não criou loja, uma montada pelos anúncios dela. */
+function lojaDe(conta) {
+  if (!conta) return null;
+  const real = vit().loja(conta);
+  if (real) return real;
+  const itens = vit().anuncios({ cat: "comida", de: conta });
+  if (!itens.length) return null;
+  const propria = itens.filter((a) => a.entrega === "propria");
+  return {
+    t: "l", virtual: true, de: conta, chave: `${conta.toLowerCase()}:perfil`, nome: `Vendedor ${curto(conta)}`, desc: "", horario: "", bairro: itens[0].bairro,
+    status: "ativo", fotos: [], entrega: propria.length ? "propria" : "combinar",
+    taxa: propria.length ? Math.max(...propria.map((a) => Number(a.taxaEntrega || 0))).toFixed(2) : "0",
+  };
+}
+
+/** Preço de um item com o sabor e os adicionais escolhidos. */
+const precoItem = (i) => Number(i.preco || 0) + Number(i.extra || 0);
+function lerEscolhas(a) {
+  let extra = 0;
+  let variacao = "";
+  if (a.variacoes?.length) {
+    const v = a.variacoes[Number($('input[name="an-var"]:checked')?.value)];
+    if (!v) throw new Error(a.cat === "comida" ? "Escolha o sabor" : "Escolha uma opção");
+    variacao = v.nome;
+    extra += Number(v.extra || 0);
+  }
+  const adicionais = $$('input[name="an-add"]:checked').map((x) => a.opcoes[Number(x.value)]).filter(Boolean);
+  extra += adicionais.reduce((t, o) => t + Number(o.extra || 0), 0);
+  return { variacao, adicionais: adicionais.map((o) => o.nome), extra: extra.toFixed(2) };
+}
+const textoEscolhas = (i) => [i.variacao, ...(i.adicionais || [])].filter(Boolean).join(", ");
+
+function camposEscolha(a) {
+  return `${a.variacoes?.length ? `<fieldset class="escolhas"><legend>${a.cat === "comida" ? "Sabor" : "Opção"} <small class="mudo">(escolha uma)</small></legend>${a.variacoes.map((v, i) => `<label class="check"><input type="radio" name="an-var" value="${i}"> ${esc(v.nome)}${Number(v.extra) ? ` <small class="mudo">${Number(v.extra) > 0 ? "+" : "−"} ${esc(reaisTxt(Math.abs(Number(v.extra)).toFixed(2)))}</small>` : ""}</label>`).join("")}</fieldset>` : ""}
+    ${a.opcoes?.length ? `<fieldset class="escolhas"><legend>Adicionais <small class="mudo">(opcional)</small></legend>${a.opcoes.map((o, i) => `<label class="check"><input type="checkbox" name="an-add" value="${i}"> ${esc(o.nome)}${Number(o.extra) > 0 ? ` <small class="mudo">+ ${esc(reaisTxt(o.extra))}</small>` : ""}</label>`).join("")}</fieldset>` : ""}`;
+}
 
 // ---------- Sacola (comida) ----------
 const CHAVE_SACOLA = "xbrl.sacola";
@@ -1694,7 +1837,7 @@ function lerSacola() {
   return { loja: null, itens: [] };
 }
 const gravarSacola = (s) => { try { localStorage.setItem(CHAVE_SACOLA, JSON.stringify(s)); } catch { /* sem armazenamento */ } };
-const totalSacola = (s) => s.itens.reduce((t, i) => t + (Number(i.preco) + Number(i.extra || 0)) * i.qtd, 0).toFixed(2);
+const totalSacola = (s) => s.itens.reduce((t, i) => t + precoItem(i) * i.qtd, 0).toFixed(2);
 
 function adicionarNaSacola() {
   const a = vit().item(S.params.chave);
@@ -1703,9 +1846,9 @@ function adicionarNaSacola() {
     if (!confirm("A sacola tem itens de outra loja. Esvaziar e começar nesta?")) return;
     s.itens = [];
   }
-  const op = a.opcoes?.[Number($("#an-opcao")?.value)];
+  const esc2 = lerEscolhas(a);
   s.loja = a.de;
-  s.itens.push({ chave: a.chave, titulo: a.titulo, preco: a.preco, qtd: Math.max(1, Math.min(50, Number($("#an-qtd")?.value) || 1)), opcao: op?.nome || "", extra: op?.extra || "0", obs: ($("#an-obs")?.value || "").trim().slice(0, 40) });
+  s.itens.push({ chave: a.chave, titulo: a.titulo, preco: a.preco, qtd: Math.max(1, Math.min(50, Number($("#an-qtd")?.value) || 1)), ...esc2, obs: ($("#an-obs")?.value || "").trim().slice(0, 40) });
   gravarSacola(s);
   toast("🛍️ Na sacola!");
   ir("LOJA", { conta: a.de });
@@ -1713,42 +1856,44 @@ function adicionarNaSacola() {
 
 TELAS.SACOLA = async () => {
   const s = lerSacola();
-  const l = s.loja ? vit().loja(s.loja) : null;
+  await vit().sincronizar().catch(() => {});
+  const l = s.loja ? lojaDe(s.loja) : null;
   if (!s.itens.length || !l) return tela(`<h1>🛍️ Sacola</h1><p class="mudo">Sua sacola está vazia.</p><button class="btn sec" data-ir="VITRINE">Ver a vitrine</button>`);
-  const taxa = Number(l.taxa || 0);
+  const taxa = l.entrega === "combinar" ? 0 : Number(l.taxa || 0);
   const subtotal = Number(totalSacola(s));
   tela(`
     <h1>🛍️ Sacola · ${esc(l.nome)}</h1>
-    <div class="cartao">${s.itens.map((i, n) => `<div class="linha"><span>${i.qtd}× ${esc(i.titulo)}${i.opcao ? ` <small class="mudo">(${esc(i.opcao)})</small>` : ""}${i.obs ? ` <small class="mudo">· ${esc(i.obs)}</small>` : ""}</span><span>${esc(reaisTxt(((Number(i.preco) + Number(i.extra || 0)) * i.qtd).toFixed(2)))} <button class="mini-x" data-acao="sac-tirar" data-n="${n}" aria-label="Tirar">✕</button></span></div>`).join("")}
-      <div class="linha"><span>Entrega (${l.entrega === "entregador" ? "entregador da rede" : "a loja entrega"})</span><span>${taxa > 0 ? esc(reaisTxt(taxa.toFixed(2))) : "grátis"}</span></div>
+    <div class="cartao">${s.itens.map((i, n) => `<div class="linha"><span>${i.qtd}× ${esc(i.titulo)}${textoEscolhas(i) || i.opcao ? ` <small class="mudo">(${esc(textoEscolhas(i) || i.opcao)})</small>` : ""}${i.obs ? ` <small class="mudo">· ${esc(i.obs)}</small>` : ""}</span><span>${esc(reaisTxt((precoItem(i) * i.qtd).toFixed(2)))} <button class="mini-x" data-acao="sac-tirar" data-n="${n}" aria-label="Tirar">✕</button></span></div>`).join("")}
+      <div class="linha"><span>Entrega (${l.entrega === "entregador" ? "entregador da rede" : l.entrega === "combinar" ? "retirar ou combinar" : "o vendedor entrega"})</span><span>${l.entrega === "combinar" ? "—" : taxa > 0 ? esc(reaisTxt(taxa.toFixed(2))) : "grátis"}</span></div>
       <div class="linha"><b>Total</b><b>${esc(reaisTxt((subtotal + taxa).toFixed(2)))}</b></div></div>
-    ${botaoPonto("📍 Onde entregar", S.sacolaPonto, "sac-mapa")}
+    ${l.entrega === "combinar" ? `<p class="mudo">📦 Retirada ou entrega combinada com o vendedor pela conversa cifrada, depois que ele aceitar o pedido.</p>` : botaoPonto("📍 Onde entregar", S.sacolaPonto, "sac-mapa")}
     ${l.entrega === "entregador" ? `<label for="sac-veiculo">Entregador de</label><select id="sac-veiculo"><option value="">Qualquer veículo</option><option value="🚲 bicicleta">Bicicleta</option><option value="🏍️ moto">Moto</option><option value="🚗 carro">Carro</option></select>` : ""}
     ${botaoSegurar("travar o pagamento e pedir", "sac-pedir")}
     <p class="mudo">🔒 O dinheiro fica travado no contrato. ${l.entrega === "entregador" ? "A loja recebe quando o entregador retira o pedido; o entregador recebe quando você der o código na porta." : "A loja recebe quando você der o código na porta, com a comida na mão."}</p>
-    <button class="btn sec" data-acao="sac-limpar">Esvaziar sacola</button>`);
+    <button class="btn perigo" data-acao="sac-limpar">🗑️ Limpar sacola</button>`);
 };
 
 async function fazerPedidoComida() {
   const s = lerSacola();
-  const l = vit().loja(s.loja);
+  const l = lojaDe(s.loja);
   if (!l || l.status !== "ativo") throw new Error("A loja está fechada agora");
+  const combinar = l.entrega === "combinar";
   const pt = S.sacolaPonto;
-  if (!pt) throw new Error("Marque no mapa onde entregar");
+  if (!pt && !combinar) throw new Error("Marque no mapa onde entregar");
   const subtotal = lerValor(totalSacola(s));
-  const taxa = lerValor(l.taxa || "0");
+  const taxa = combinar ? 0n : lerValor(l.taxa || "0");
   const comEntregador = l.entrega === "entregador";
   const kitLoja = E.parseEther("0.3");
   const kitEntregador = comEntregador ? E.parseEther("0.3") : 0n;
   const total = subtotal + taxa;
   await conferirSaldos(total, kitLoja + kitEntregador);
-  const resumo = s.itens.map((i) => `${i.qtd}× ${i.titulo}${i.opcao ? ` (${i.opcao})` : ""}${i.obs ? ` [${i.obs}]` : ""}`).join(", ");
-  const destino = textoDoPonto(pt);
+  const resumo = s.itens.map((i) => `${i.qtd}× ${i.titulo}${textoEscolhas(i) || i.opcao ? ` (${textoEscolhas(i) || i.opcao})` : ""}${i.obs ? ` [${i.obs}]` : ""}`).join(", ");
+  const destino = pt ? textoDoPonto(pt) : "a combinar pela conversa";
   if (!comEntregador) {
-    const { p, codigo } = prepararTrabalho({ modalidade: 1, trabalhador: E.getAddress(l.de), valor: total, horas: 6, descricao: `🍔 Pedido ${l.nome}: ${resumo}`, privado: `🛍️ ${resumo}\n🏁 Entregar em: ${destino}` });
+    const { p, codigo } = prepararTrabalho({ modalidade: 1, trabalhador: E.getAddress(l.de), valor: total, horas: 6, descricao: `🍔 Pedido ${l.nome}: ${resumo}`, privado: `🛍️ ${resumo}\n🏁 ${combinar ? "Retirada/entrega: a combinar" : `Entregar em: ${destino}`}` });
     await executar("Fazer pedido", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, total, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kitLoja }) }]);
     gravarSacola({ loja: null, itens: [] });
-    modal(`<h2>✅ Pedido feito</h2><p>A loja vê o pedido e aceita. Depois, envie o endereço na tela do pedido (vai cifrado).</p><p><b>🔑 Código de entrega</b> — dê ao entregador <b>só com a comida na mão</b>:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+    modal(`<h2>✅ Pedido feito</h2><p>${combinar ? "O vendedor vê o pedido e aceita. Depois, combinem a retirada ou a entrega pela 💬 conversa do pedido." : "A loja vê o pedido e aceita. Depois, envie o endereço na tela do pedido (vai cifrado)."}</p><p><b>🔑 Código de entrega</b> — dê ao entregador <b>só com a comida na mão</b>:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
     return ir("TRABALHOS", { aba: "meus" });
   }
   // Dois trabalhos: A (produto → loja, código de retirada C1) e B (entrega → entregador, código de entrega C2)
@@ -2131,6 +2276,8 @@ async function pedirCorrida() {
   const { p, codigo } = novaCorrida({ trabalhador: favorito, valor, prazo: (agendada || agora()) + horas * 3600 + Math.max(3600, Math.round(r.rota.min * 3 * 60)), descricao, privado: enderecoCorrida(r.dePonto, r.paraPonto) });
   await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
   S.corrida = { categorias: r.categorias, pessoas: 1, validade: r.validade };
+  pedirAvisos();
+  corridaViva().then(() => atualizarPlantao()).catch(() => {});
   modal(`<h2>✅ Corrida pedida</h2>
     <p>O pagamento está travado. ${favorito !== E.ZeroAddress ? "Seu motorista favorito recebe o pedido." : "Deixe o app aberto: quando um motorista quiser, você vê o carro, a placa e a reputação e aprova."}</p>
     <p><b>🔑 Código do destino</b> — mostre ao motorista <b>só quando chegar</b>. Com ele, o motorista recebe:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>
@@ -2905,6 +3052,8 @@ async function acao(nome, el) {
   }
   if (nome?.startsWith("an-status-")) return mudarStatus(nome.slice(10));
   switch (nome) {
+    case "oferecer-servico":
+      return ir("ANUNCIAR", { cat: "servicos" });
     case "vit-anunciar-pix":
       return ir("ANUNCIAR", { cat: "pix" });
     case "an-editar":
@@ -2921,6 +3070,8 @@ async function acao(nome, el) {
       return ir("ANUNCIAR", { ...S.params, cat: "pix", lado: nome.slice(7) });
     case "na-spec-mais":
       return $("#na-specs").insertAdjacentHTML("beforeend", linhaSpec());
+    case "na-var-mais":
+      return $("#na-vars").insertAdjacentHTML("beforeend", linhaVar());
     case "na-opcao-mais":
       return $("#na-opcoes").insertAdjacentHTML("beforeend", linhaOpcao());
     case "na-bairro-mapa": {
@@ -2951,12 +3102,21 @@ async function acao(nome, el) {
     }
     case "sac-limpar":
       gravarSacola({ loja: null, itens: [] });
-      return ir("VITRINE");
+      toast("Sacola limpa");
+      return S.tela === "VITRINE" ? render() : ir("VITRINE");
     case "pix-recusar": {
       const p = S.pedidosPix?.get(el.dataset.k);
       if (p) CO.resolver(p.texto);
       el.closest(".correio")?.remove();
       return toast("Pedido recusado.");
+    }
+    case "loja-online": {
+      const liga = !lojaOnline();
+      try { localStorage.setItem("xbrl.loja.online", liga ? "1" : "0"); } catch { /* ok */ }
+      if (liga) await pedirAvisos();
+      atualizarPlantao();
+      toast(liga ? "🔔 Você vai receber aviso de pedido novo" : "Avisos de pedido desligados");
+      return render();
     }
     case "pix-copiar-pedido":
       await navigator.clipboard.writeText(S.pedidoPix || "");
@@ -3007,7 +3167,8 @@ async function acao(nome, el) {
       S.motorista.online = !S.motorista.online;
       try { localStorage.setItem("xbrl.motorista.online", S.motorista.online ? "1" : "0"); } catch { /* ok */ }
       S.motorista.vistos = null;
-      if (S.motorista.online) S.motorista.aqui = await minhaPosicao();
+      if (S.motorista.online) { S.motorista.aqui = await minhaPosicao(); await pedirAvisos(); }
+      atualizarPlantao();
       return render();
     case "mot-filtros": {
       const f = { veiculo: $("#mf-veiculo").value, raio: Number($("#mf-raio").value), minKm: Number(String($("#mf-minkm").value).replace(",", ".")) || 0 };

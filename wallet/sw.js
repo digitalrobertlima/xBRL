@@ -1,7 +1,7 @@
 // xBRL — Service Worker
 // Estratégia: rede primeiro para os arquivos do próprio site (atualização imediata a cada publicação),
 // cache como reserva para funcionar offline. Chamadas a RPCs (outros domínios) nunca são interceptadas.
-const VERSAO = "brls-wallet-v3.6.1";
+const VERSAO = "brls-wallet-v3.6.3";
 const ARQUIVOS = [
   "./",
   "./index.html",
@@ -62,4 +62,14 @@ self.addEventListener("fetch", (ev) => {
       })
       .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match("./index.html"))),
   );
+});
+
+// Toque num aviso (pedido novo, motorista a caminho…): abre ou traz o app para a frente.
+self.addEventListener("notificationclick", (ev) => {
+  ev.notification.close();
+  ev.waitUntil((async () => {
+    const abertas = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of abertas) if ("focus" in c) return c.focus();
+    return self.clients.openWindow("./");
+  })());
 });

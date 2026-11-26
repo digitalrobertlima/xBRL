@@ -72,7 +72,11 @@ export function limpar(o) {
     t: "a", id, cat: o.cat, titulo: txt(o.titulo, 80), desc: txt(o.desc, 900), preco: valorTxt(o.preco), bairro: txt(o.bairro, 40),
     status: STATUS[o.status] ? o.status : "ativo", entrega: ENTREGAS[o.entrega] ? o.entrega : "combinar",
     specs: Array.isArray(o.specs) ? o.specs.slice(0, 14).map((p) => [txt(p?.[0], 30), txt(p?.[1], 80)]).filter((p) => p[0] && p[1]) : [],
-    opcoes: Array.isArray(o.opcoes) ? o.opcoes.slice(0, 10).map((p) => ({ nome: txt(p?.nome, 40), extra: valorTxt(p?.extra) || "0" })).filter((p) => p.nome) : [],
+    // Adicionais: opcionais, o cliente marca quantos quiser (ex.: "bacon + R$ 4,00")
+    opcoes: Array.isArray(o.opcoes) ? o.opcoes.slice(0, 15).map((p) => ({ nome: txt(p?.nome, 40), extra: valorTxt(p?.extra) || "0" })).filter((p) => p.nome) : [],
+    // Sabores / variações: o cliente escolhe UMA (ex.: carne, queijo, frango; com limão, sem limão)
+    variacoes: Array.isArray(o.variacoes) ? o.variacoes.slice(0, 20).map((p) => ({ nome: txt(p?.nome, 40), extra: valorTxt(p?.extra) || "0" })).filter((p) => p.nome) : [],
+    taxaEntrega: valorTxt(o.taxaEntrega) || "0",
     servico: o.servico === "presencial" || o.servico === "remoto" ? o.servico : null,
     fotos: Array.isArray(o.fotos) ? o.fotos.slice(0, MAX_FOTOS).map((n) => num(n, 1, 5) | 0) : [],
   };

@@ -218,7 +218,10 @@ export class EscrowClient {
         t.txAceite = ev.tx;
       }
       if (ev.nome === "CandidaturaEncerrada") t.candidato = null;
-      if (ev.nome === "TrabalhoCancelado") t.encerrado = true;
+      // Terminou (vai para "Arquivados"): cancelado/reembolsado, pago ao trabalhador ou disputa resolvida
+      if (ev.nome === "TrabalhoCancelado") Object.assign(t, { encerrado: true, fim: "cancelado" });
+      if (ev.nome === "TrabalhoConcluido") Object.assign(t, { encerrado: true, fim: "concluido" });
+      if (ev.nome === "DisputaResolvida") Object.assign(t, { encerrado: true, fim: "resolvido" });
     }
     return mapa;
   }
@@ -267,6 +270,7 @@ export class EscrowClient {
     const zero = e().ZeroAddress;
     const mapa = this.resumoTrabalhos();
     const meus = [];
+    const arquivados = [];
     const vagas = [];
     const arbitragens = [];
     const souCriador = eu === CREATOR_TREASURY.toLowerCase();
@@ -276,15 +280,16 @@ export class EscrowClient {
       const souTrab = eu !== zero.toLowerCase() && ((t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu));
       const souArbitro = t.arbitros.some((x) => x.toLowerCase() === eu) || (souCriador && t.desempateCriador);
       const aberta = t.trabalhador === zero && !t.candidato && !t.encerrado && t.prazo > Math.floor(Date.now() / 1000);
-      if ((souCliente && eu !== zero.toLowerCase()) || souTrab) meus.push(t);
+      if ((souCliente && eu !== zero.toLowerCase()) || souTrab) (t.encerrado ? arquivados : meus).push(t);
       else if (souArbitro) arbitragens.push(t);
       else if (aberta) vagas.push(t);
     }
     const ord = (a, b) => b.bloco - a.bloco;
     meus.sort(ord);
+    arquivados.sort(ord);
     vagas.sort(ord);
     arbitragens.sort(ord);
-    return { meus, vagas, arbitragens };
+    return { meus, vagas, arbitragens, arquivados };
   }
 
   async reputacao(conta) {

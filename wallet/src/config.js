@@ -7,7 +7,7 @@ import { ABIS } from "./abis.js";
 
 export { ABIS };
 
-export const VERSAO = "3.8.0";
+export const VERSAO = "3.9.0";
 export const CREATOR_TREASURY = "0x2F8Fe2689411Bb336301AD4f2DC4077D433F43d1";
 export const TAXA_BPS = 10n; // 0,1% na emissão, no resgate e nos pagamentos do Escrow (transferência é grátis)
 
@@ -87,7 +87,7 @@ export const REDES = {
 /** Tanque de gás transparente. */
 export const TANQUE = {
   alvoPol: "3.0", // enche até 3,0 POL
-  gatilhoPol: "1.0", // abaixo disso sugere/realiza o abastecimento
+  gatilhoPol: "1.5", // abaixo disso abastece sozinho (ligado de fábrica; decisão do dono, 26/11/2026)
   minimoParaOperarPol: "0.02", // reserva mínima para pagar o próprio swap
   slippageMaxBps: 100n, // 1,00% no máximo, nunca mais
   validadeSegundos: 300,

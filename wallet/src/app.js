@@ -322,7 +322,7 @@ async function executar(titulo, passos) {
     const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo, decimais: t.decimais, moeda: t.moeda || "BRL" }));
     modal(`<div class="giro"></div><h2>${esc(titulo)}</h2><p class="mudo">Verificando o tanque de gás…</p>`);
     const auto = S.externa ? null : await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, opts, [S.imp?.xBRL]).catch(() => null);
-    if (auto) toast(`⛽ Tanque abastecido com ${auto.simbolo}`);
+    if (auto) { S.ultimoAbastecimento = Date.now(); toast(`⛽ Tanque abastecido com ${auto.simbolo}`); }
     // Sem POL para terminar? Se der, vira pedido sem gás (QR/link) para outra pessoa enviar.
     const saldoPol = await S.provider.getBalance(S.endereco);
     const precisa = opts.maxFeePerGas * 400_000n * BigInt(passos.length);
@@ -702,7 +702,7 @@ async function vigiaFundo() {
       avisos.push([`🚗 Corrida: ${cor.de} → ${cor.para}`, `R$ ${fmt(t.valor)} · ${cor.nomeCategorias}${cor.km != null ? ` · ${brNum(cor.km, 1)} km` : ""}`]);
     }
     if (t.trabalhador?.toLowerCase() === eu && t.cliente.toLowerCase() !== eu && novo(`d${t.id}`)) {
-      avisos.push([cor ? "🚗 Corrida para você" : "🛍️ Novo pedido para você", String(t.descricao).slice(0, 120)]);
+      avisos.push([cor ? "🚗 Corrida para você" : "🛍️ Novo pedido para você", String(t.descricao).split("\n")[0].slice(0, 120)]);
     }
   }
   const v = lerViva();
@@ -1074,8 +1074,23 @@ function primeirosPassos(pol, saldoX) {
   </section>`;
 }
 
+/** Trava de segurança do gás: abaixo de 1,5 POL, troca um pouco de BRLS (ou lastro/USDC) por POL sozinho. */
+async function tanqueAutomatico() {
+  if (S.externa || !S.carteira || !G.autoAtivo() || !S.rede?.uniswap || S.abastecendo) return null;
+  if (S.ultimoAbastecimento && Date.now() - S.ultimoAbastecimento < 10 * 60_000) return null;
+  S.abastecendo = true;
+  try {
+    const preferidos = S.tokensInfo.filter((t) => t.principal || t.lastro || t.simbolo === "USDC").map((t) => ({ endereco: t.endereco, simbolo: t.simbolo, decimais: t.decimais, moeda: t.moeda || "BRL" }));
+    const auto = await G.abastecerSeNecessario(S.provider, S.carteira, S.chainId, preferidos, await opcoesGas(), [S.imp?.xBRL]);
+    S.ultimoAbastecimento = Date.now(); // tentou: não tenta de novo em 10 min (sucesso ou sem rota)
+    if (auto) toast(`⛽ Gás baixo: o tanque encheu sozinho com ${auto.simbolo}`);
+    return auto;
+  } catch { S.ultimoAbastecimento = Date.now(); return null; } finally { S.abastecendo = false; }
+}
+
 TELAS.INICIO = async () => {
   tela(`<div class="cartao"><div class="giro"></div></div>`);
+  if (await tanqueAutomatico().catch(() => null)) return render();
   const [pol, saldos] = await Promise.all([
     S.provider.getBalance(S.endereco),
     Promise.all(S.tokensInfo.map((t) => erc20(t.endereco).balanceOf(S.endereco).catch(() => 0n))),
@@ -1108,7 +1123,7 @@ TELAS.INICIO = async () => {
     <div class="cartao">
       <div class="linha"><b>⛽ Tanque de gás</b><span>${fmt(pol, 18, 3)} ${esc(S.rede.nativo.simbolo)} / ${TANQUE.alvoPol}</span></div>
       <div class="tanque" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${tanque.nivelPct}" style="--n:${tanque.nivelPct}%"><i></i></div>
-      ${tanque.precisaAbastecer ? `<p class="mudo">Tanque baixo. ${G.autoAtivo() ? "O abastecimento automático vai agir na próxima operação." : "Toque em Tanque para abastecer."}</p>` : ""}
+      ${tanque.precisaAbastecer ? `<p class="mudo">Tanque baixo. ${G.autoAtivo() ? "A trava automática tenta encher sozinha (troca um pouco do seu saldo por POL). Se não der, toque em Tanque." : "O abastecimento automático está desligado: toque em Tanque para abastecer."}</p>` : ""}
     </div>
     <div class="cartao"><h2 style="margin-top:0">Outros saldos</h2>
       ${S.tokensInfo.map((t, i) => (t.principal ? "" : `<div class="linha"><span>${esc(t.simbolo)}</span><b>${fmt(saldos[i], t.decimais)}</b></div>`)).join("") || `<p class="mudo">Nenhum.</p>`}
@@ -1580,6 +1595,15 @@ async function marcarPontoCorrida(qual) {
 }
 
 /** Abre um ponto no app de GPS. No APK (Tor) quem abre é a Caixa Forte; fora dele, o link normal. */
+/** Links de fora (WhatsApp, Jitsi, Drive…) dentro do APK: quem abre é a Caixa Forte (o app não tem internet própria). */
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest("[data-externo]");
+  if (!a || !REDE_PELA_PONTE) return;
+  ev.preventDefault();
+  window.parent.postMessage({ brls: 1, tipo: "abrir", url: a.dataset.externo }, "*");
+  toast("Abrindo…");
+}, true);
+
 document.addEventListener("click", (ev) => {
   const a = ev.target.closest("[data-gps]");
   if (!a || !REDE_PELA_PONTE) return;
@@ -2854,12 +2878,21 @@ TELAS.TRABALHO_NOVO = () => {
     <h1>Contratar</h1>
     <div class="grade duas">${ESCROW.modalidades.map((x) => `<button class="atalho" data-acao="mod-${x.id}" aria-pressed="${x.id === m}" style="${x.id === m ? "border-color:var(--o400);background:rgba(212,175,55,.14)" : ""}"><span>${x.icone}</span>${esc(x.nome)}</button>`).join("")}</div>
     <p class="mudo">${esc(ESCROW.modalidades[m].resumo)}</p>
-    <label for="tn-desc">O que precisa ser feito</label><input id="tn-desc" maxlength="100" placeholder="Ex.: Escrever uma mensagem num papel">
+    <label for="tn-desc">O que precisa ser feito (título)</label><input id="tn-desc" maxlength="100" placeholder="Ex.: Pintar a sala de 12 m²">
+    <label for="tn-detalhes">📝 Detalhes do trabalho (aparece para todos)</label><textarea id="tn-detalhes" rows="5" maxlength="600" placeholder="Conte tudo o que a pessoa precisa saber: o que fazer, tamanho, materiais, horário, o que está incluso, como você quer receber o resultado…"></textarea>
+    <p class="mudo">Não coloque telefone nem endereço aqui: isso vai abaixo, só para quem for fazer.</p>
     ${m === 0 || m === 1 ? `<label for="tn-regiao">📍 Bairro e cidade ${m === 1 ? "da entrega" : "do serviço"} (obrigatório, aparece para todos)</label><input id="tn-regiao" maxlength="36" placeholder="Ex.: Savassi, Belo Horizonte">
     <label for="tn-endereco">🏠 Endereço completo (obrigatório)</label><input id="tn-endereco" maxlength="200" placeholder="Rua, número, complemento, referência">
     <button type="button" class="btn sec" data-acao="tn-mapa">🗺️ Marcar o ponto exato no mapa</button>
     <p class="mudo" id="tn-ponto">${S.params.ponto ? `📍 Ponto marcado: ${esc(fmtCoord(S.params.ponto.lat, S.params.ponto.lon))}` : "Recomendado: com o ponto no mapa, a pessoa abre direto no GPS dela."}</p>
     <p class="mudo">Por segurança, o endereço completo não fica público: só a pessoa aceita vê, pela conversa cifrada do trabalho.</p>` : ""}
+    <details class="cartao" open><summary><b>📞 Contato direto (só para quem for fazer)</b></summary>
+      <p class="mudo">Vai cifrado, só para a pessoa confirmada no trabalho. Assim vocês conversam pelo WhatsApp sem gastar mensagem na blockchain.</p>
+      <label for="tn-whats">Seu WhatsApp (opcional)</label><input id="tn-whats" inputmode="tel" autocomplete="tel" placeholder="(31) 99999-9999" value="${esc(meuWhatsSalvo() ? whatsBonito(meuWhatsSalvo()) : "")}">
+      ${m === 2 || m === 3 ? `<label class="linha" style="color:var(--txt)"><span>🎥 Criar uma sala no Jitsi Meet para as reuniões (grátis, sem cadastro)</span><input type="checkbox" id="tn-jitsi" style="width:auto" checked></label>` : ""}
+      <label for="tn-links">${m === 2 || m === 3 ? "Links do trabalho (Google Drive, documentos, referências)" : "Links (opcional: fotos, referências)"}</label><textarea id="tn-links" rows="2" autocapitalize="none" spellcheck="false" placeholder="Um link por linha, começando com https://"></textarea>
+      <label for="tn-priv">Detalhes só para quem for fazer (opcional)</label><textarea id="tn-priv" rows="3" maxlength="1000" placeholder="Ex.: senha do portão, nome de quem vai receber, instruções particulares…"></textarea>
+    </details>
     <label for="tn-kit">⛽ Gás para o trabalhador (POL)</label><input id="tn-kit" inputmode="decimal" value="1">
     <p class="mudo">Vai junto com o pagamento e chega na carteira de quem for trabalhar, para a pessoa nunca travar por falta de taxa: 1 POL dá para dezenas de operações. Se ninguém aceitar, volta para você. Pode diminuir ou deixar 0.</p>
     <label for="tn-valor">Pagamento (BRLS)</label><input id="tn-valor" class="grande" inputmode="decimal" placeholder="0,00">
@@ -2949,6 +2982,7 @@ TELAS.TRABALHO = async () => {
     <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>${blocoCorrida(t, souCliente)}` : `<h1>${iconeDesc(resumo?.descricao, m).map((x, i) => (i ? esc(x) : x)).join(" ")}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
     ${barraFases(fasesTrabalho(t, souCliente, { comChegada: resumo?.comChegada }))}
+    ${detalhesDesc(resumo?.descricao) ? `<div class="cartao detalhes"><h2 style="margin-top:0">📝 Detalhes</h2><p>${comLinks(esc(detalhesDesc(resumo?.descricao)))}</p></div>` : ""}
     ${!ativo ? `<div class="ok">📁 <b>Arquivado.</b> ${t.estado === 5 ? "Cancelado: o valor travado voltou para a carteira de quem contratou." : "Concluído: o pagamento já foi feito."} Os códigos deste trabalho não valem mais.</div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Valor</span><b>${fmt(t.valor)} BRLS</b></div>
@@ -2976,6 +3010,7 @@ TELAS.TRABALHO = async () => {
     ${ativo && souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
 ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? `o ${NOME.trab.toLowerCase()}` : souArbitro ? "as partes" : `o ${NOME.cliente.toLowerCase()}`}</button>` : ""}
+    ${ativo && souParte && t.trabalhador !== z && t.estado >= 1 && t.estado <= 3 ? blocoContato(t, souCliente) : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
     ${codigo ? `<h2>🔑 ${cor ? "Código do destino" : `Código de ${t.modalidade === 1 ? "entrega" : "liberação"}`}</h2><p class="mudo">${cor ? "Mostre ao motorista <b>só quando chegar ao destino</b>. Com ele, o motorista recebe na hora." : "Entregue só a quem recebe, na hora da entrega."}</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
     ${devolucao ? `<details class="cartao"><summary><b>↩️ Código de devolução</b> (só se a mercadoria voltar para você)</summary><p class="mudo">Entregue ao entregador <b>somente</b> quando ele devolver a mercadoria em suas mãos. Com ele, você recebe o pagamento de volta e ele recupera a caução.</p>${qrSvg(devolucao)}<div class="codigo">${esc(devolucao)}</div></details>` : ""}
@@ -3011,6 +3046,13 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
   const perfilMot = cor && mot ? vit()?.motorista(mot) : null;
   if (perfilMot?.fotos?.length) vit().fotos(perfilMot).then((u) => { const b = $("#cor-foto-mot"); if (b && u[0]) b.innerHTML = `<img src="${u[0]}" alt="Foto do motorista">`; }).catch(() => {});
   if ($("#rota")) carregarRota(t);
+  if ($("#contato") && S.chat) {
+    // Contato: chega cifrado pelo avisador; o meu é reenviado a cada 6 h (o avisador guarda por 12 h)
+    const f = lerFicha(t.id);
+    if (f.postadoEm && Date.now() - f.postadoEm > 6 * 3600_000) enviarContato(S.params.t, true).catch(() => {});
+    else if (!f.postadoEm && f.auto) enviarContato(S.params.t, true).then((ok) => ok && toast("📤 Seu contato foi para a outra parte")).catch(() => {});
+    receberContato(S.params.t).then((novo) => { if (novo && S.tela === "TRABALHO" && String(S.params.id) === String(t.id)) { $("#contato").outerHTML = blocoContato(S.params.t, souCliente); toast("📞 Chegou o contato da outra pessoa"); } }).catch(() => {});
+  }
   if ($("#cor-gorjeta-v")) ligarMaximo("#cor-gorjeta-v", saldoBrls);
   vivo().catch(() => {});
   vigiar("TRABALHO", vivo, 12000);
@@ -3045,6 +3087,132 @@ function blocoCorrida(t, souCliente) {
   return p.join("");
 }
 
+/** Detalhes públicos do trabalho: tudo depois da 1ª linha da descrição. */
+const detalhesDesc = (d) => String(d || "").split("\n").slice(1).join("\n").trim();
+
+// ---------- Contato direto: WhatsApp, sala do Jitsi, links (Drive etc.) ----------
+// Nada disso vai para a blockchain em texto claro: vai CIFRADO (ECDH da conversa) pelo avisador, de graça,
+// e fica guardado no aparelho de cada um. Alternativa permanente: mandar pela conversa cifrada (custa gás).
+const PREFIXO_CONTATO = "brlscontato:";
+const chaveFicha = (id) => `xbrl.contato.${S.chainId}.${S.imp?.EscrowTrabalho}.${id}`;
+function lerFicha(id) { try { return JSON.parse(localStorage.getItem(chaveFicha(id)) || "null") || { meu: {}, deles: {} }; } catch { return { meu: {}, deles: {} }; } }
+function gravarFicha(id, f) { try { localStorage.setItem(chaveFicha(id), JSON.stringify(f)); } catch { /* sem armazenamento */ } }
+const meuWhatsSalvo = () => { try { return localStorage.getItem("xbrl.meu.whatsapp") || ""; } catch { return ""; } };
+/** Número de WhatsApp só com dígitos, com o 55 do Brasil se faltar. "" se não parece um número. */
+function normalizarWhats(txt) {
+  let d = String(txt || "").replace(/\D/g, "");
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.length === 10 || d.length === 11) d = "55" + d;
+  return d.length >= 12 && d.length <= 15 ? d : "";
+}
+const whatsBonito = (d) => (d.startsWith("55") && d.length >= 12 ? `+55 (${d.slice(2, 4)}) ${d.slice(4, -4)}-${d.slice(-4)}` : `+${d}`);
+/** Link que abre a conversa no WhatsApp (Android e iPhone). A ligação é um toque lá dentro. */
+const linkWhats = (num, texto) => `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
+function linkSeguro(u) {
+  try { const x = new URL(String(u).trim()); return x.protocol === "https:" && x.href.length <= 400 ? x.href : ""; } catch { return ""; }
+}
+function iconeLink(u) {
+  const h = (() => { try { return new URL(u).hostname; } catch { return ""; } })();
+  if (/(^|\.)meet\.jit\.si$|jitsi/.test(h)) return ["🎥", "Sala de vídeo (Jitsi)"];
+  if (/drive\.google|docs\.google/.test(h)) return ["📁", "Google Drive"];
+  if (/meet\.google|zoom\.us|teams\./.test(h)) return ["🎥", "Sala de vídeo"];
+  if (/dropbox|onedrive|1drv|wetransfer/.test(h)) return ["📁", "Arquivos"];
+  if (/github|gitlab|figma|notion|canva|trello/.test(h)) return ["🧩", h.replace(/^www\./, "")];
+  return ["🔗", h.replace(/^www\./, "")];
+}
+function novaSalaJitsi(id) {
+  const r = [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `https://meet.jit.si/BRLS-${id}-${r}`;
+}
+/** Botão de link externo. No APK, quem abre é a Caixa Forte (data-externo). */
+const botaoLink = (u, rotulo, classe = "btn sec") => `<a class="${classe}" href="${esc(u)}" target="_blank" rel="noopener noreferrer" data-externo="${esc(u)}">${rotulo}</a>`;
+/** Transforma https://… em links clicáveis num texto JÁ escapado. */
+const comLinks = (html) => html.replace(/https:\/\/[^\s<>"'`]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer" data-externo="${u}">${u}</a>`);
+
+/** A outra parte do trabalho (endereço e tx onde a chave pública dela aparece). */
+function outraParte(t) {
+  const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
+  return souCliente ? { conta: t.trabalhador, txs: t.txAceite ? [t.txAceite] : [] } : { conta: t.cliente, txs: t.txCriacao ? [t.txCriacao] : [] };
+}
+/** Manda o meu contato cifrado para a outra parte, pelo avisador (de graça). */
+async function enviarContato(t, silencioso = false) {
+  const f = lerFicha(t.id);
+  if (!f.meu.wa && !(f.meu.links || []).length && !f.meu.det) { if (!silencioso) throw new Error("Preencha o WhatsApp ou um link antes de compartilhar"); return false; }
+  const o = outraParte(t);
+  const pub = await S.chat.chaveDe(o.conta, o.txs);
+  if (!pub) { if (!silencioso) throw new Error("Ainda não achei a chave da outra pessoa. Use \"Enviar pela conversa cifrada\"."); return false; }
+  const cif = await cifrarChat(S.carteira, pub, JSON.stringify({ ...f.meu, em: agora() }));
+  const ok = await CO.postarTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), PREFIXO_CONTATO + cif).then(() => true).catch(() => false);
+  if (!ok) { if (!silencioso) throw new Error("O avisador não respondeu. Use \"Enviar pela conversa cifrada\"."); return false; }
+  f.postadoEm = Date.now();
+  gravarFicha(t.id, f);
+  return true;
+}
+/** Lê o contato da outra parte (avisador, cifrado) e guarda no aparelho. */
+async function receberContato(t) {
+  const textos = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "12h", PREFIXO_CONTATO).catch(() => []);
+  if (!textos.length) return false;
+  const o = outraParte(t);
+  const pub = await S.chat.chaveDe(o.conta, o.txs);
+  if (!pub) return false;
+  const f = lerFicha(t.id);
+  let mudou = false;
+  for (const x of textos) {
+    try {
+      const d = JSON.parse((await decifrarChat(S.carteira, pub, x.slice(PREFIXO_CONTATO.length))).texto);
+      if (!(d.em > (f.deles.em || 0))) continue;
+      f.deles = { wa: normalizarWhats(d.wa), links: (Array.isArray(d.links) ? d.links : []).map((l) => ({ t: String(l.t || "").slice(0, 40), u: linkSeguro(l.u) })).filter((l) => l.u).slice(0, 8), det: String(d.det || "").slice(0, 1000), em: Number(d.em) };
+      mudou = true;
+    } catch { /* não é para mim */ }
+  }
+  if (mudou) gravarFicha(t.id, f);
+  return mudou;
+}
+/** Cartão "Contato direto" no trabalho (depois que alguém foi confirmado). */
+function blocoContato(t, souCliente) {
+  const f = lerFicha(t.id);
+  const remoto = t.modalidade === 2 || t.modalidade === 3;
+  const quem = souCliente ? "quem vai fazer" : "quem contratou";
+  const nome = souCliente ? "o trabalhador" : "o contratante";
+  const msgWa = `Olá! Aqui é ${souCliente ? "quem contratou" : "quem vai fazer"} o trabalho #${t.id} no BRLS.`;
+  const deles = f.deles || {};
+  const recebido = deles.wa || (deles.links || []).length || deles.det;
+  const meuWa = f.meu.wa || meuWhatsSalvo();
+  const meusLinks = f.meu.links || [];
+  return `<div class="cartao contato" id="contato">
+    <h2 style="margin-top:0">📞 Falar direto com ${esc(nome)}</h2>
+    ${recebido ? `
+      ${deles.wa ? `${botaoLink(linkWhats(deles.wa, msgWa), `💬 Chamar no WhatsApp · ${esc(whatsBonito(deles.wa))}`, "btn prim whats")}<p class="mudo">Abre a conversa no WhatsApp (Android e iPhone). Para ligar, é só tocar no telefone lá dentro.</p>` : ""}
+      ${(deles.links || []).map((l) => { const [ic, r] = iconeLink(l.u); return botaoLink(l.u, `${ic} ${esc(l.t || r)}`); }).join("")}
+      ${deles.det ? `<p class="detalhes-priv">${comLinks(esc(deles.det))}</p>` : ""}`
+    : `<p class="mudo">Quando ${esc(nome)} compartilhar o WhatsApp ou um link, ele aparece aqui.</p>`}
+    <details ${f.postadoEm ? "" : "open"}><summary><b>${f.postadoEm ? "✅ Você já compartilhou o seu contato" : "Compartilhe o seu contato"}</b></summary>
+      <label for="ct-wa">Seu WhatsApp (só ${esc(quem)} vê)</label><input id="ct-wa" inputmode="tel" autocomplete="tel" placeholder="(31) 99999-9999" value="${esc(meuWa ? whatsBonito(normalizarWhats(meuWa) || meuWa) : "")}">
+      <label class="linha" style="color:var(--txt)"><span>Lembrar o meu WhatsApp neste aparelho</span><input type="checkbox" id="ct-lembrar" style="width:auto" ${meuWhatsSalvo() ? "checked" : ""}></label>
+      <p class="rotulo-ponto">${remoto ? "Sala de reunião e arquivos" : "Links (opcional)"}</p>
+      ${remoto ? `<p class="mudo">Sugestão: faça as reuniões no <b>Jitsi Meet</b>: grátis, sem cadastro, funciona no navegador e no app. Um toque cria a sala deste trabalho.</p>` : ""}
+      <div id="ct-links">${meusLinks.map((l, i) => { const [ic, r] = iconeLink(l.u); return `<div class="linha"><span>${ic} ${esc(l.t || r)}</span><button type="button" class="btn sec mini" data-acao="ct-tirar-${i}">Tirar</button></div>`; }).join("")}</div>
+      <button type="button" class="btn sec" data-acao="ct-jitsi">🎥 Criar sala no Jitsi</button>
+      <div class="grade duas"><input id="ct-link" inputmode="url" autocapitalize="none" spellcheck="false" placeholder="https://drive.google.com/…"><button type="button" class="btn sec" data-acao="ct-add-link">+ Link</button></div>
+      <label for="ct-det">Recado/detalhes só para ${esc(quem)} (opcional)</label><textarea id="ct-det" rows="3" maxlength="1000" placeholder="Ex.: horário, ponto de referência, o que levar…">${esc(f.meu.det || "")}</textarea>
+      <button type="button" class="btn prim" data-acao="ct-compartilhar">📤 Compartilhar com ${esc(nome)} (cifrado, grátis)</button>
+      <button type="button" class="btn sec" data-acao="ct-pela-conversa">🔒 Enviar pela conversa cifrada (fica guardado para sempre, custa a taxa)</button>
+    </details>
+  </div>`;
+}
+/** Lê o formulário de contato para a ficha (sem enviar). */
+function guardarFormContato(t) {
+  const f = lerFicha(t.id);
+  const bruto = $("#ct-wa")?.value || "";
+  const wa = normalizarWhats(bruto);
+  if (bruto.trim() && !wa) throw new Error("WhatsApp inválido: use DDD + número, ex.: (31) 99999-9999");
+  f.meu.wa = wa;
+  f.meu.det = ($("#ct-det")?.value || "").trim().slice(0, 1000);
+  gravarFicha(t.id, f);
+  try { if ($("#ct-lembrar")?.checked && wa) localStorage.setItem("xbrl.meu.whatsapp", wa); else if (!$("#ct-lembrar")?.checked) localStorage.removeItem("xbrl.meu.whatsapp"); } catch { /* ok */ }
+  return f;
+}
+
 const fotoTrabalho = (t) => [t.estado, t.trabalhador, t.candidato, t.chegou, t.encerrado, t.pendenteAprovacao].join("|");
 
 /** Rótulos dos pontos de um texto de endereço (corrida: embarque e destino). */
@@ -3054,9 +3222,9 @@ const rotulosPontos = (texto) => {
   if (t.includes("Retirada:")) return ["🏪 Retirada na loja", "🏁 Entrega no cliente"];
   return ["📍 Local"];
 };
-/** Ícone e texto de um trabalho: se a descrição já começa com emoji (vitrine, corrida), usa o dela. */
+/** Ícone e texto de um trabalho: se a descrição já começa com emoji (vitrine, corrida), usa o dela. Só a 1ª linha (o resto são os detalhes). */
 function iconeDesc(descricao, m) {
-  const d = String(descricao || m.nome);
+  const d = String(descricao || m.nome).split("\n")[0];
   const e = /^(\p{Extended_Pictographic}\uFE0F?)\s*/u.exec(d);
   return e && !d.startsWith("📍") ? [esc(e[1]), d.slice(e[0].length)] : [m.icone, d];
 }
@@ -3191,7 +3359,7 @@ TELAS.CHAT = async () => {
     <h1>💬 Conversa do trabalho #${esc(t.id)}</h1>
     <p class="mudo">Cifrada de ponta a ponta: só ${quem.length > 2 ? "as partes e os árbitros" : "vocês dois"} conseguem ler. Cada mensagem é uma pequena transação (custa um pouco de POL) e fica guardada para sempre, servindo de registro numa disputa.</p>
     <div class="cartao" id="chat-lista" style="max-height:55vh;overflow:auto">
-      ${msgs.map((m) => `<div class="msg ${m.de.toLowerCase() === S.endereco.toLowerCase() ? "minha" : ""}"><small class="mudo">${esc(papelDe(t, m.de))}${m.em ? " · " + new Date(m.em * 1000).toLocaleString("pt-BR") : ""}</small><p>${esc(m.texto)}</p>${botoesGps(m.texto, rotulosPontos(m.texto))}</div>`).join("") || `<p class="mudo">Nenhuma mensagem ainda. Diga olá! 👋</p>`}
+      ${msgs.map((m) => `<div class="msg ${m.de.toLowerCase() === S.endereco.toLowerCase() ? "minha" : ""}"><small class="mudo">${esc(papelDe(t, m.de))}${m.em ? " · " + new Date(m.em * 1000).toLocaleString("pt-BR") : ""}</small><p>${comLinks(esc(m.texto))}</p>${botoesGps(m.texto, rotulosPontos(m.texto))}</div>`).join("") || `<p class="mudo">Nenhuma mensagem ainda. Diga olá! 👋</p>`}
     </div>
     <label for="chat-txt">Mensagem</label><textarea id="chat-txt" maxlength="${MAX_CARACTERES}" placeholder="Ex.: Estou chegando em 10 minutos"></textarea>
     <button class="btn prim" data-acao="chat-enviar">Enviar mensagem</button>
@@ -3709,7 +3877,48 @@ async function acao(nome, el) {
         });
       });
     }
+    case "ct-jitsi":
+    case "ct-add-link": {
+      const t = S.params.t;
+      const f = guardarFormContato(t);
+      const u = nome === "ct-jitsi" ? novaSalaJitsi(t.id) : linkSeguro($("#ct-link").value);
+      if (!u) throw new Error("Cole um link que comece com https://");
+      f.meu.links = [...(f.meu.links || []).filter((l) => l.u !== u), { t: nome === "ct-jitsi" ? "Sala de vídeo (Jitsi)" : "", u }].slice(-8);
+      f.postadoEm = 0;
+      gravarFicha(t.id, f);
+      $("#contato").outerHTML = blocoContato(t, t.cliente.toLowerCase() === S.endereco.toLowerCase());
+      $("#contato details").open = true;
+      return toast(nome === "ct-jitsi" ? "🎥 Sala criada. Toque em Compartilhar para mandar" : "🔗 Link adicionado. Toque em Compartilhar para mandar");
+    }
+    case "ct-compartilhar": {
+      const t = S.params.t;
+      guardarFormContato(t);
+      await enviarContato(t);
+      $("#contato").outerHTML = blocoContato(t, t.cliente.toLowerCase() === S.endereco.toLowerCase());
+      return toast("📤 Contato enviado, cifrado: só a outra pessoa consegue ler");
+    }
+    case "ct-pela-conversa": {
+      const t = S.params.t;
+      const f = guardarFormContato(t);
+      const linhas = [f.meu.wa ? `📇 Meu WhatsApp: ${whatsBonito(f.meu.wa)} https://wa.me/${f.meu.wa}` : "", ...(f.meu.links || []).map((l) => `${iconeLink(l.u)[0]} ${l.t || iconeLink(l.u)[1]}: ${l.u}`), f.meu.det].filter(Boolean);
+      if (!linhas.length) throw new Error("Preencha o WhatsApp ou um link antes de enviar");
+      const txs = {};
+      if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
+      if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
+      const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), linhas.join("\n").slice(0, MAX_CARACTERES), txs);
+      return executar("Enviar contato", [passoMensagem("Enviar cifrado", prep)]);
+    }
     default:
+      if (nome?.startsWith("ct-tirar-")) {
+        const t = S.params.t;
+        const f = guardarFormContato(t);
+        f.meu.links = (f.meu.links || []).filter((_, i) => i !== Number(nome.slice(9)));
+        f.postadoEm = 0;
+        gravarFicha(t.id, f);
+        $("#contato").outerHTML = blocoContato(t, t.cliente.toLowerCase() === S.endereco.toLowerCase());
+        $("#contato details").open = true;
+        return;
+      }
       if (nome?.startsWith("mod-")) return ir("TRABALHO_NOVO", { modalidade: Number(nome.slice(4)) });
       if (nome?.startsWith("cofre-ativo-")) return ir("COFRE", { ativo: Number(nome.slice(12)), modo: S.params.modo });
       if (nome?.startsWith("cofre-modo-")) return ir("COFRE", { ativo: S.params.cofre?.x.i ?? 0, modo: nome.slice(11) });
@@ -3861,6 +4070,16 @@ async function criarTrabalho() {
   if ((m === 0 || m === 1) && enderecoCompleto.length < 8) throw new Error("Informe o endereço completo: sem ele a pessoa não sabe aonde ir");
   const valor = lerValor($("#tn-valor").value, 18);
   if (valor === 0n) throw new Error("Informe o pagamento");
+  if ($("#tn-desc").value.trim().length < 3) throw new Error("Diga em poucas palavras o que precisa ser feito (título)");
+  const detalhes = ($("#tn-detalhes")?.value || "").replace(/\r/g, "").trim().slice(0, 600);
+  const waBruto = $("#tn-whats")?.value || "";
+  const wa = normalizarWhats(waBruto);
+  if (waBruto.trim() && !wa) throw new Error("WhatsApp inválido: use DDD + número, ex.: (31) 99999-9999");
+  const linksTxt = ($("#tn-links")?.value || "").split(/\s+/).filter(Boolean);
+  const ruim = linksTxt.find((u) => !linkSeguro(u));
+  if (ruim) throw new Error(`Link inválido: ${ruim.slice(0, 40)} (precisa começar com https://)`);
+  const priv = ($("#tn-priv")?.value || "").trim().slice(0, 1000);
+  const querJitsi = !!$("#tn-jitsi")?.checked;
   const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
   if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e o pagamento é ${fmt(valor)}. Pegue BRLS na aba Reserva (troque BRZ/BRLA/BRL1) e tente de novo.`);
   if (saldoPol < E.parseEther("0.05")) throw new Error("Você precisa de um pouco de POL (uns 0,2) para pagar a taxa da rede. Mande POL para o seu endereço na tela Receber.");
@@ -3896,14 +4115,22 @@ async function criarTrabalho() {
     desempateCriador: m !== 1 && !!$("#tn-desempate")?.checked,
     caucao,
     devolucaoHash,
-    descricao: (regiao ? `📍 ${regiao} · ` : "") + $("#tn-desc").value.trim().slice(0, 100),
+    descricao: (regiao ? `📍 ${regiao} · ` : "") + $("#tn-desc").value.trim().replace(/\n/g, " ").slice(0, 100) + (detalhes ? `\n${detalhes}` : ""),
   };
   const chaveEnd = m === 0 ? chegadaHash : codigoHash;
   if (enderecoCompleto) try { localStorage.setItem(`xbrl.endereco.${chaveEnd}`, enderecoCompleto); } catch { /* sem armazenamento */ }
   const kit = S.imp.Encaminhador ? lerValor($("#tn-kit")?.value || "0", 18) : 0n;
   if (kit > E.parseEther("5")) throw new Error("O gás para o trabalhador pode ser no máximo 5 POL");
   if (saldoPol < kit + E.parseEther("0.05")) throw new Error(`Você tem ${fmt(saldoPol, 18, 3)} POL: não dá para deixar ${fmt(kit, 18, 3)} de gás para o trabalhador e ainda pagar a taxa. Diminua o valor.`);
-  await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
+  const rec = await executar("Contratar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
+  // Contato direto: fica guardado no aparelho e vai cifrado (sozinho) para quem for confirmado no trabalho
+  const idNovo = idDoRecibo(rec);
+  if (idNovo && (wa || linksTxt.length || priv || querJitsi)) {
+    const links = linksTxt.map((u) => ({ t: "", u: linkSeguro(u) })).slice(0, 7);
+    if (querJitsi) links.unshift({ t: "Sala de vídeo (Jitsi)", u: novaSalaJitsi(idNovo) });
+    gravarFicha(idNovo, { meu: { wa, links, det: priv }, deles: {}, auto: true });
+    try { if (wa) localStorage.setItem("xbrl.meu.whatsapp", wa); } catch { /* ok */ }
+  }
   if (codigo || chegada) {
     modal(`<h2>✅ Pagamento travado</h2>
       ${chegada ? `<p><b>📍 Código de chegada</b> — deixe no local ou mostre na porta:</p>${qrSvg(chegada)}<div class="codigo" id="cod-chegada">${esc(chegada)}</div>` : ""}
@@ -3912,6 +4139,16 @@ async function criarTrabalho() {
       <p class="mudo">Os códigos também ficam salvos neste aparelho, na tela do trabalho.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   }
   ir("TRABALHOS", { aba: "meus" });
+}
+
+/** Número do trabalho criado, lido do recibo (evento TrabalhoCriado). */
+function idDoRecibo(rec) {
+  if (!rec?.logs) return null;
+  const k = c("EscrowTrabalho");
+  for (const l of rec.logs) {
+    try { const ev = k.interface.parseLog(l); if (ev?.name === "TrabalhoCriado") return String(ev.args.id); } catch { /* outro contrato */ }
+  }
+  return null;
 }
 
 async function acaoTrabalho(nome) {

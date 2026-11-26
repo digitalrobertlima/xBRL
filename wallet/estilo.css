@@ -381,3 +381,15 @@ fieldset.escolhas label.check { margin: 8px 0; align-items: center; }
 #faixa-viva.trabalho { border-color: var(--gravura-viva); }
 #faixa-viva.trabalho i { grid-row: 1 / span 3; }
 body:has(#faixa-viva.trabalho) #tela { padding-bottom: 112px; }
+
+/* ---------- Contato direto (WhatsApp, Jitsi, links) e detalhes ---------- */
+a.btn { display: flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; text-align: center; box-sizing: border-box; }
+a.btn.whats { background: #1FA855; border-color: #1FA855; color: #fff; }
+a.btn.whats:hover, a.btn.whats:focus-visible { background: #22bf60; }
+.contato .linha .btn.mini { width: auto; margin: 0; padding: 6px 12px; min-height: 0; }
+.contato .grade.duas { align-items: center; }
+.contato .grade.duas input { margin: 0; }
+.detalhes p, .detalhes-priv { white-space: pre-line; overflow-wrap: anywhere; }
+.detalhes-priv { padding: 10px 12px; border-left: 3px solid var(--gravura-viva); background: rgba(18, 54, 41, .6); border-radius: 0 var(--raio) var(--raio) 0; }
+.msg p a, .detalhes a, .detalhes-priv a { color: var(--ipe-claro); overflow-wrap: anywhere; }
+textarea { resize: vertical; }

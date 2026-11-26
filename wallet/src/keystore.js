@@ -1,6 +1,8 @@
 // =====================================================================
 // xBRL — Cofre de chaves local (autocustódia)
-// - Frase de recuperação BIP-39 de 12 palavras (padrão MetaMask/Rabby: m/44'/60'/0'/0/0).
+// - Frase de recuperação BIP-39 de 12 ou 24 palavras, em inglês (padrão MetaMask/Rabby) ou em português
+//   (lista oficial BIP-39, a mesma da Caixa Forte). Caminho m/44'/60'/0'/0/0. O idioma é descoberto
+//   pelas próprias palavras: nenhuma palavra existe nas duas listas.
 // - A frase é cifrada com AES-256-GCM por uma CHAVE DE DADOS aleatória.
 // - A chave de dados é "embrulhada" (AES-256-GCM) por:
 //     a) PIN de 6 dígitos → PBKDF2-SHA256 (600.000 iterações, sal aleatório);
@@ -8,6 +10,7 @@
 // - Nada sai do aparelho. Sem servidor. Sem cópia em nuvem.
 // =====================================================================
 import { SEGURANCA } from "./config.js";
+import { PALAVRAS } from "./palavras-pt.js";
 
 const CHAVE_STORAGE = "xbrl.cofre.v1";
 const CAMINHO = "m/44'/60'/0'/0/0";
@@ -21,21 +24,65 @@ const aleatorio = (n) => crypto.getRandomValues(new Uint8Array(n));
 
 // --------------------------- Frase BIP-39 ---------------------------
 
-export function gerarFrase() {
-  return ethers().Mnemonic.fromEntropy(aleatorio(16)).phrase; // 128 bits = 12 palavras
+export const QUANTIDADES = [12, 15, 18, 21, 24];
+const INDICE_PT = new Map(PALAVRAS.map((w, i) => [w, i]));
+let listaPt = null;
+function portugues() {
+  if (listaPt) return listaPt;
+  class Portugues extends ethers().Wordlist {
+    constructor() { super("pt"); }
+    getWord(i) { return PALAVRAS[i]; }
+    getWordIndex(w) { const v = INDICE_PT.get(String(w)); return v === undefined ? -1 : v; }
+  }
+  return (listaPt = new Portugues());
+}
+const lista = (idioma) => (idioma === "pt" ? portugues() : ethers().wordlists.en);
+
+/** Minúsculas, sem acentos (as listas oficiais não têm acento), um espaço entre as palavras. */
+export function normalizarFrase(frase) {
+  return String(frase || "").trim().toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").split(/\s+/).filter(Boolean).join(" ");
 }
 
-export function normalizarFrase(frase) {
-  return String(frase || "").trim().toLowerCase().normalize("NFKD").split(/\s+/).join(" ");
+/** "pt", "en" ou null (palavras misturadas ou fora das listas). */
+export function idiomaDaFrase(frase) {
+  const ws = normalizarFrase(frase).split(" ").filter(Boolean);
+  if (!ws.length) return null;
+  if (ws.every((w) => INDICE_PT.has(w))) return "pt";
+  const en = ethers().wordlists.en;
+  if (ws.every((w) => en.getWordIndex(w) >= 0)) return "en";
+  return null;
+}
+
+/** Nova frase: 12 palavras (128 bits) ou 24 (256 bits), em inglês ou português. */
+export function gerarFrase(quantas = 12, idioma = "en") {
+  const bytes = quantas === 24 ? 32 : 16;
+  return ethers().Mnemonic.fromEntropy(aleatorio(bytes), undefined, lista(idioma)).phrase;
 }
 
 export function fraseValida(frase) {
   const f = normalizarFrase(frase);
-  return f.split(" ").length === 12 && ethers().Mnemonic.isValidMnemonic(f);
+  const idioma = idiomaDaFrase(f);
+  if (!idioma || !QUANTIDADES.includes(f.split(" ").length)) return false;
+  return ethers().Mnemonic.isValidMnemonic(f, lista(idioma));
+}
+
+/** Por que a frase não serve (para a pessoa corrigir), ou "" se serve. */
+export function problemaDaFrase(frase) {
+  const f = normalizarFrase(frase);
+  const ws = f ? f.split(" ") : [];
+  if (!ws.length) return "Digite as palavras.";
+  if (!QUANTIDADES.includes(ws.length)) return `São ${ws.length} palavras. A frase tem 12 ou 24 (às vezes 15, 18 ou 21).`;
+  const en = ethers().wordlists.en;
+  const estranhas = ws.filter((w) => !INDICE_PT.has(w) && en.getWordIndex(w) < 0);
+  if (estranhas.length) return `Palavra que não existe na lista: "${estranhas.slice(0, 3).join('", "')}". Confira a grafia.`;
+  if (!idiomaDaFrase(f)) return "Tem palavras em português e em inglês misturadas. A frase é toda numa língua só.";
+  if (!fraseValida(f)) return "As palavras existem, mas a ordem ou alguma palavra não confere (o código de conferência da frase falhou).";
+  return "";
 }
 
 export function carteiraDaFrase(frase) {
-  return ethers().HDNodeWallet.fromPhrase(normalizarFrase(frase), undefined, CAMINHO);
+  const f = normalizarFrase(frase);
+  return ethers().HDNodeWallet.fromPhrase(f, undefined, CAMINHO, lista(idiomaDaFrase(f) || "en"));
 }
 
 // --------------------------- Cripto base ---------------------------

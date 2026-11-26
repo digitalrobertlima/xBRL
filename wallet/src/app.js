@@ -502,10 +502,10 @@ TELAS.BOAS_VINDAS = () => tela(`
     <p>Cada BRLS vale R$ 1. Você guarda, paga, contrata e recebe por trabalho, sem banco no meio e sem ninguém poder congelar.</p>
   </div>
   <button class="btn prim" data-acao="criar">Criar minha carteira</button>
-  <button class="btn sec" data-acao="restaurar">Já tenho as 12 palavras</button>
+  <button class="btn sec" data-acao="restaurar">Já tenho minhas palavras (12 ou 24)</button>
   <button class="btn sec" data-ir="VAGAS_PUBLICAS">👀 Ver vagas de trabalho abertas</button>
   ${temInjetada() ? `<button class="btn sec" data-acao="conectar-injetada">🔌 Usar a carteira deste navegador (MetaMask, Rabby)</button>` : ""}
-  <div class="aviso">Sem cadastro, sem servidor. Se você perder as 12 palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
+  <div class="aviso">Sem cadastro, sem servidor. Se você perder as suas palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
 
 TELAS.VAGAS_PUBLICAS = async () => {
   if (!S.escrow) return tela(`<h1>Vagas abertas</h1><div class="aviso">Ainda não há trabalhos nesta rede.</div><button class="btn sec" data-ir="BOAS_VINDAS">Voltar</button>`);
@@ -527,11 +527,22 @@ TELAS.VAGAS_PUBLICAS = async () => {
 };
 
 TELAS.CRIAR_FRASE = () => {
-  S.frasePendente ||= K.gerarFrase();
+  S.opcoesFrase ||= { n: 12, idioma: "en" };
+  S.frasePendente ||= K.gerarFrase(S.opcoesFrase.n, S.opcoesFrase.idioma);
   const p = S.frasePendente.split(" ");
+  const o = S.opcoesFrase;
+  const opcao = (acao, ativo, rotulo, dica) => `<button class="btn ${ativo ? "prim" : "sec"} opcao-frase" data-acao="${acao}" aria-pressed="${ativo}">${rotulo}<small>${dica}</small></button>`;
   tela(`
-    <h1>Suas 12 palavras</h1>
+    <h1>Suas ${p.length} palavras</h1>
     <p class="mudo">Elas SÃO a sua carteira. Anote no papel, na ordem, e guarde longe de fotos e nuvem.</p>
+    <div class="opcoes-frase" role="group" aria-label="Quantidade de palavras">
+      ${opcao("frase-12", o.n === 12, "12 palavras", "o mais comum")}
+      ${opcao("frase-24", o.n === 24, "24 palavras", "ainda mais forte")}
+    </div>
+    <div class="opcoes-frase" role="group" aria-label="Língua das palavras">
+      ${opcao("frase-en", o.idioma === "en", "Em inglês", "funciona na MetaMask e na Rabby")}
+      ${opcao("frase-pt", o.idioma === "pt", "Em português", "mais fácil de anotar; funciona na Caixa Forte")}
+    </div>
     <ol class="palavras borrado" id="palavras">${p.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
     <button class="btn sec" data-acao="revelar">👁️ Mostrar palavras</button>
     <div class="aviso">Nunca digite essas palavras em sites ou mensagens. Ninguém do BRLS vai pedir.</div>
@@ -542,7 +553,7 @@ TELAS.CRIAR_FRASE = () => {
 TELAS.CONFIRMAR_FRASE = () => {
   const pos = [];
   while (pos.length < 3) {
-    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 12;
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] % S.frasePendente.split(" ").length;
     if (!pos.includes(r)) pos.push(r);
   }
   pos.sort((a, b) => a - b);
@@ -556,8 +567,8 @@ TELAS.CONFIRMAR_FRASE = () => {
 };
 
 TELAS.RESTAURAR = () => tela(`
-  <h1>Restaurar carteira</h1><p class="mudo">Digite as 12 palavras separadas por espaço.</p>
-  <textarea id="frase" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="12 palavras"></textarea>
+  <h1>Restaurar carteira</h1><p class="mudo">Digite as suas palavras (12 ou 24), na ordem, separadas por espaço. Em português ou em inglês: o app reconhece sozinho.</p>
+  <textarea id="frase" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Palavras de recuperação"></textarea>
   <div id="msg" role="alert"></div>
   <button class="btn prim" data-acao="restaurar-ok">Continuar</button>
   <button class="btn sec" data-acao="voltar-boas-vindas">Voltar</button>`);
@@ -602,7 +613,7 @@ TELAS.BLOQUEADA = async () => {
     </div>
     <div class="deslizar"><input type="range" id="deslize" min="0" max="100" value="0" aria-label="Deslize para desbloquear"><span>Deslize para desbloquear ➜</span></div>
     ${bio ? `<button class="btn sec" data-acao="biometria">👆 Usar biometria</button>` : ""}
-    <button class="btn sec" data-acao="esqueci" style="margin-top:30px">Esqueci o PIN (restaurar com 12 palavras)</button>`);
+    <button class="btn sec" data-acao="esqueci" style="margin-top:30px">Esqueci o PIN (restaurar com as palavras)</button>`);
   const r = $("#deslize");
   const soltar = () => {
     if (Number(r.value) >= 96) pedirPin();
@@ -627,7 +638,7 @@ function primeirosPassos(pol, saldoX) {
   let escondido = false;
   try { escondido = localStorage.getItem("xbrl.guia.ok") === "1"; } catch { /* */ }
   const passos = [
-    { feito: true, titulo: "Guardar as 12 palavras", texto: "São a chave do seu dinheiro. Papel, fora do celular." },
+    { feito: true, titulo: "Guardar as suas palavras", texto: "São a chave do seu dinheiro. Papel, fora do celular." },
     { feito: pol > 0n, titulo: "Ter um pouco de POL", texto: "É a moeda que paga a taxa da rede (centavos). Quem te contratar pode mandar junto com o trabalho.", ir: "RECEBER", botao: "Ver meu endereço" },
     { feito: saldoX > 0n, titulo: "Ter BRLS", texto: "Receba por um trabalho, peça para alguém te enviar, ou troque BRZ por BRLS na Reserva.", ir: "RESERVA", botao: "Ir para a Reserva" },
     { feito: false, titulo: "Fazer o primeiro trabalho", texto: "Veja as vagas abertas ou contrate alguém. O pagamento fica travado até o fim, seguro para os dois.", ir: "TRABALHOS", botao: "Ver trabalhos" },
@@ -1247,13 +1258,13 @@ TELAS.AJUSTES = async () => {
     <h1>Ajustes</h1>
     <label for="aj-rede">Rede</label>
     <select id="aj-rede">${redes.map((r) => `<option value="${r.chainId}" ${r.chainId === S.chainId ? "selected" : ""}>${esc(r.nome)}</option>`).join("")}</select>
-    ${S.externa ? `<div class="cartao ok"><b>🔌 Conectada pela ${esc(S.externa.nome)}</b><p class="mudo">As chaves ficam na ${esc(S.externa.nome)}: é lá que você confirma cada operação, tranca a carteira e guarda as 12 palavras.</p></div>` : `
+    ${S.externa ? `<div class="cartao ok"><b>🔌 Conectada pela ${esc(S.externa.nome)}</b><p class="mudo">As chaves ficam na ${esc(S.externa.nome)}: é lá que você confirma cada operação, tranca a carteira e guarda as palavras.</p></div>` : `
     <div class="cartao">
       <div class="linha"><span>Biometria (chave no chip)</span><b>${K.temBiometria() ? "ativada" : bioDisp ? "disponível" : "indisponível"}</b></div>
       ${bioDisp && !K.temBiometria() ? `<button class="btn sec" data-acao="bio-ativar">👆 Ativar biometria</button>` : ""}
       ${K.temBiometria() ? `<button class="btn sec" data-acao="bio-desativar">Desativar biometria</button>` : ""}
     </div>
-    <button class="btn sec" data-ir="BACKUP">🔑 Ver minhas 12 palavras</button>
+    <button class="btn sec" data-ir="BACKUP">🔑 Ver minhas palavras</button>
     <button class="btn sec" data-acao="trocar-pin">🔢 Trocar PIN</button>
     <button class="btn sec" data-acao="bloquear">🔒 Bloquear agora</button>`}
     <div class="cartao">
@@ -1266,7 +1277,7 @@ TELAS.AJUSTES = async () => {
     ${S.externa ? "" : `<h2>Zona de perigo</h2>
     <label for="aj-apagar">Para apagar a carteira deste aparelho, digite APAGAR</label><input id="aj-apagar" autocomplete="off">
     <button class="btn perigo segurar" data-confirmar="apagar"><i>✋ Segure para apagar deste aparelho</i></button>
-    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as 12 palavras.</p>`}`);
+    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as suas palavras.</p>`}`);
   $("#aj-rede").addEventListener("change", async (ev) => {
     const id = Number(ev.target.value);
     localStorage.setItem("xbrl.rede", String(id));
@@ -1277,9 +1288,10 @@ TELAS.AJUSTES = async () => {
 };
 
 TELAS.BACKUP = () =>
-  tecladoPin("Confirme o PIN", "Para mostrar as 12 palavras.", async (pin) => {
+  tecladoPin("Confirme o PIN", "Para mostrar as suas palavras.", async (pin) => {
     const frase = await K.abrirComPin(pin);
-    tela(`<h1>Suas 12 palavras</h1><ol class="palavras">${frase.split(" ").map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
+    const idioma = K.idiomaDaFrase(frase) === "pt" ? "em português" : "em inglês";
+    tela(`<h1>Suas ${frase.split(" ").length} palavras</h1><p class="mudo">${idioma}</p><ol class="palavras">${frase.split(" ").map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
       <div class="aviso">Não tire print. Anote no papel.</div><button class="btn prim" data-ir="AJUSTES">Pronto</button>`);
   });
 
@@ -1341,6 +1353,16 @@ async function acao(nome, el) {
     case "criar":
       S.frasePendente = null;
       return ir("CRIAR_FRASE");
+    case "frase-12":
+    case "frase-24":
+    case "frase-en":
+    case "frase-pt": {
+      S.opcoesFrase ||= { n: 12, idioma: "en" };
+      if (nome === "frase-12" || nome === "frase-24") S.opcoesFrase.n = nome === "frase-24" ? 24 : 12;
+      else S.opcoesFrase.idioma = nome === "frase-pt" ? "pt" : "en";
+      S.frasePendente = null; // nova frase com a escolha (a anterior nunca foi usada)
+      return render();
+    }
     case "restaurar":
       return ir("RESTAURAR");
     case "voltar-boas-vindas":
@@ -1354,7 +1376,7 @@ async function acao(nome, el) {
       return ir("CRIAR_FRASE");
     case "conferir": {
       const p = S.frasePendente.split(" ");
-      const ok = S.params.posicoes.every((i) => $(`#w${i}`).value.trim().toLowerCase() === p[i]);
+      const ok = S.params.posicoes.every((i) => K.normalizarFrase($(`#w${i}`).value) === p[i]);
       if (!ok) {
         $("#msg").innerHTML = `<div class="erro">Alguma palavra não confere. Veja de novo a sua anotação.</div>`;
         return;
@@ -1363,15 +1385,16 @@ async function acao(nome, el) {
     }
     case "restaurar-ok": {
       const f = $("#frase").value;
-      if (!K.fraseValida(f)) {
-        $("#msg").innerHTML = `<div class="erro">Frase inválida. Confira as 12 palavras e a ordem.</div>`;
+      const problema = K.problemaDaFrase(f);
+      if (problema) {
+        $("#msg").innerHTML = `<div class="erro">${esc(problema)}</div>`;
         return;
       }
       S.frasePendente = K.normalizarFrase(f);
       return ir("DEFINIR_PIN");
     }
     case "esqueci":
-      modal(`<h2>Restaurar com 12 palavras?</h2><p>Isso apaga a carteira cifrada deste aparelho. Seu dinheiro fica intacto e volta com as 12 palavras.</p>
+      modal(`<h2>Restaurar com as palavras?</h2><p>Isso apaga a carteira cifrada deste aparelho. Seu dinheiro fica intacto e volta com as suas palavras (12 ou 24).</p>
         <button class="btn perigo segurar" data-confirmar="esqueci"><i>✋ Segure para continuar</i></button><button class="btn sec" data-acao="fechar-modal">Cancelar</button>`);
       return;
     case "biometria": {

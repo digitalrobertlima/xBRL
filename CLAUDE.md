@@ -44,7 +44,7 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 
 ## 4. Carteira (PWA) — regras
 - Máquina de estados em `wallet/src/app.js` (`TRANSICOES`): telas só mudam por transições declaradas; o "voltar" do aparelho não fura o bloqueio.
-- Chave: BIP-39 12 palavras (`m/44'/60'/0'/0/0`), cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
+- Chave: BIP-39 de 12 ou 24 palavras (importa 12/15/18/21/24), em inglês ou português (lista oficial, a mesma da Caixa Forte; idioma descoberto pelas palavras, `keystore.js`), caminho `m/44'/60'/0'/0/0`, cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
 - Mover dinheiro = **segurar para confirmar** (1,2 s). Desbloquear = **deslizar + PIN**.
 - Chegada/entrega: código em palavras ou QR (gerado no aparelho com `vendor/qrcode.mjs`, MIT; leitura via `BarcodeDetector`, com digitação como alternativa). Nunca GPS.
 - Biometria (WebAuthn PRF) oferecida logo após criar o PIN.

@@ -10,6 +10,7 @@
 //                (b64 = corpo em base64: imagens do mapa)
 //   filho → mãe  { tipo: "copiar", texto }   (área de transferência do celular, apagada sozinha)
 //   filho → mãe  { tipo: "gps", lat, lon, app }   (abrir o ponto no app de GPS: só com toque da pessoa)
+//   filho → mãe  { tipo: "tela-acesa", liga }   (corrida em andamento / motorista online: tela não apaga)
 // "?tor=pai": janela dentro do próprio BRLS (o comprovante) usa a rede da janela de cima.
 // Este arquivo tem de ser o PRIMEIRO import de cada página.
 // =====================================================================

@@ -548,6 +548,8 @@ setInterval(() => {
 
 /** Mantém a tela do celular acesa durante a corrida e enquanto o motorista está online. */
 async function telaAcesa(liga) {
+  // No APK (Tor) a janela não tem Wake Lock: pede à Caixa Forte para manter a tela acesa
+  if (REDE_PELA_PONTE && S.acesaNativa !== liga) { S.acesaNativa = liga; window.parent.postMessage({ brls: 1, tipo: "tela-acesa", liga }, "*"); }
   try {
     if (liga) {
       S.querAcesa = true;

@@ -78,7 +78,7 @@ a { color: var(--ipe-claro); text-underline-offset: 3px; }
 .icone-btn { background: none; border: 0; font-size: 20px; padding: 6px; cursor: pointer; border-radius: 10px; }
 main { flex: 1; width: 100%; max-width: 560px; margin: 0 auto; padding: 20px 16px 116px; }
 .abas {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; grid-template-columns: repeat(4, 1fr);
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: grid; grid-template-columns: repeat(5, 1fr);
   padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); background: rgba(6, 23, 16, .95); backdrop-filter: blur(12px);
   border-top: 1px solid var(--gravura);
 }
@@ -284,3 +284,23 @@ body.com-mapa { overflow: hidden; }
 .arquivados summary { cursor: pointer; padding: 12px 4px; font-weight: 600; }
 .arquivados summary small { font-weight: 400; margin-left: 6px; }
 .item.arquivado { opacity: .72; border-style: dashed; }
+
+/* ---------- Vitrine ---------- */
+.cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 12px; }
+.cats button { display: grid; gap: 4px; justify-items: center; padding: 10px 4px; border-radius: var(--raio); border: 1px solid rgba(62, 125, 102, .55); background: var(--folha); color: var(--papel); font: inherit; font-size: 13px; cursor: pointer; }
+.cats button span { font-size: 24px; line-height: 1; }
+.cats button[aria-pressed="true"] { border-color: var(--ipe); box-shadow: inset 0 -3px 0 var(--ipe); }
+.cats button:focus-visible { outline: 3px solid var(--ipe); outline-offset: 2px; }
+.item .ic.foto { width: 56px; height: 56px; border-radius: 10px; overflow: hidden; display: grid; place-items: center; background: var(--mata-funda); flex: none; }
+.item .ic.foto img { width: 100%; height: 100%; object-fit: cover; }
+.fotos { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -4px 8px; }
+.fotos img { height: 240px; max-width: 92%; border-radius: var(--raio); object-fit: cover; scroll-snap-align: start; }
+.fotos.mini img { height: 84px; }
+.preco { font-family: var(--serifa); font-size: 28px; color: var(--ipe-claro); margin: 4px 0 10px; }
+.spec { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+.spec input { margin: 4px 0; }
+.passos-mini { padding-left: 20px; color: var(--mudo); }
+.passos-mini li { margin: 4px 0; }
+.mini-x { background: none; border: 0; color: var(--urucum); font-size: 16px; cursor: pointer; padding: 0 0 0 8px; }
+.mapa-campos { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; }
+.mapa-campos input { margin: 0 0 8px; }

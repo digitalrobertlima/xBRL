@@ -222,6 +222,7 @@ export class EscrowClient {
       if (ev.nome === "TrabalhoCancelado") Object.assign(t, { encerrado: true, fim: "cancelado" });
       if (ev.nome === "TrabalhoConcluido") Object.assign(t, { encerrado: true, fim: "concluido" });
       if (ev.nome === "DisputaResolvida") Object.assign(t, { encerrado: true, fim: "resolvido" });
+      if (ev.nome === "Avaliacao") (t.avaliadores ||= []).push(String(ev.args.avaliador).toLowerCase());
     }
     return mapa;
   }
@@ -280,7 +281,10 @@ export class EscrowClient {
       const souTrab = eu !== zero.toLowerCase() && ((t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu));
       const souArbitro = t.arbitros.some((x) => x.toLowerCase() === eu) || (souCriador && t.desempateCriador);
       const aberta = t.trabalhador === zero && !t.candidato && !t.encerrado && t.prazo > Math.floor(Date.now() / 1000);
-      if ((souCliente && eu !== zero.toLowerCase()) || souTrab) (t.encerrado ? arquivados : meus).push(t);
+      // Concluído ainda sem a sua avaliação (≥ 10 BRLS) continua na lista até você avaliar
+      const falta = t.fim === "concluido" && BigInt(t.valor || 0) >= 10n ** 19n && !(t.avaliadores || []).includes(eu);
+      if (falta) t.avaliar = true;
+      if ((souCliente && eu !== zero.toLowerCase()) || souTrab) (t.encerrado && !falta ? arquivados : meus).push(t);
       else if (souArbitro) arbitragens.push(t);
       else if (aberta) vagas.push(t);
     }

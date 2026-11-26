@@ -357,3 +357,27 @@ fieldset.escolhas label.check { margin: 8px 0; align-items: center; }
 .disponivel { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 8px; font-size: 15px; }
 .disponivel .btn.mini { width: auto; min-height: 0; padding: 8px 14px; margin: 0; font-size: 15px; flex: none; }
 .disponivel .btn.mini:disabled { opacity: .45; }
+
+/* ---------- Fases de um trabalho (barra de progresso) ---------- */
+.fases { list-style: none; display: flex; margin: 12px 0 4px; padding: 0; counter-reset: none; }
+.fases li { flex: 1; position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; text-align: center; font-size: 12px; color: var(--mudo); }
+.fases li::before { content: ""; position: absolute; top: 13px; left: -50%; width: 100%; height: 3px; background: rgba(62, 125, 102, .45); z-index: 0; }
+.fases li:first-child::before { display: none; }
+.fases li.feito::before, .fases li.agora::before { background: var(--gravura-viva); }
+.fases li i { position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-weight: 700; font-family: var(--serifa); font-variant-numeric: tabular-nums; background: var(--mata-funda); border: 2px solid rgba(62, 125, 102, .7); color: var(--mudo); }
+.fases li.feito i { background: var(--gravura-viva); border-color: var(--gravura-viva); color: var(--mata-funda); }
+.fases li.agora i { border-color: var(--ipe); color: var(--ipe-claro); box-shadow: 0 0 0 4px rgba(242, 184, 7, .18); }
+.fases li.agora span { color: var(--papel); font-weight: 600; }
+.fases li span { overflow: hidden; text-overflow: ellipsis; max-width: 100%; white-space: nowrap; padding: 0 2px; }
+.fases.alerta li.agora i { border-color: var(--pequi); color: var(--pequi); box-shadow: 0 0 0 4px rgba(245, 158, 11, .2); }
+.fases.cancelado { opacity: .5; }
+.fase-agora { margin: 6px 0 12px; text-align: center; font-weight: 600; color: var(--ipe-claro); }
+.fase-agora.alerta { color: var(--pequi); }
+.fases-mini { display: block; height: 5px; border-radius: 999px; background: rgba(62, 125, 102, .4); overflow: hidden; margin-top: 6px; grid-column: 1; }
+.fases-mini > span { display: block; height: 100%; background: var(--gravura-viva); border-radius: inherit; }
+.fases-mini.alerta > span { background: var(--pequi); }
+.fase-item { display: block; font-size: 13px; color: var(--ipe-claro); margin-top: 2px; }
+.fase-item.alerta { color: var(--pequi); }
+#faixa-viva.trabalho { border-color: var(--gravura-viva); }
+#faixa-viva.trabalho i { grid-row: 1 / span 3; }
+body:has(#faixa-viva.trabalho) #tela { padding-bottom: 112px; }

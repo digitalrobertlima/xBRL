@@ -531,25 +531,114 @@ async function aoEntrar() {
   const volta = S.voltarPara;
   S.voltarPara = null;
   if (await voltarParaCorrida(true).catch(() => false)) return;
+  atualizarVivos().then(() => desenharFaixaViva(lerViva())).catch(() => {});
   if (volta && S.tela === "INICIO" && ABERTAS.includes(volta.tela)) ir(volta.tela, volta.params);
 }
 
 /** Faixa fixa "Corrida em andamento" em todas as telas, enquanto houver corrida. */
 function desenharFaixaViva(v) {
   let f = $("#faixa-viva");
-  const mostrar = v && S.carteira && ABERTAS.includes(S.tela) && !naTelaDaCorrida(v);
+  // Sem corrida: a faixa mostra os trabalhos/contratações em andamento (mesmo jeito da corrida)
+  const tv = !v ? S.trabalhosVivos : null;
+  const naTela = v ? naTelaDaCorrida(v) : tv && (S.tela === "TRABALHOS" || S.tela === "TRABALHO_NOVO" || S.tela === "CHAT" || (S.tela === "TRABALHO" && tv.lista.some((x) => x.id === String(S.params.id))));
+  const mostrar = (v || tv?.lista.length) && S.carteira && ABERTAS.includes(S.tela) && !naTela;
   if (!mostrar) { f?.remove(); return; }
   if (!f) {
     f = document.createElement("button");
     f.id = "faixa-viva";
     f.type = "button";
-    f.addEventListener("click", () => { const x = lerViva(); if (x) ir(x.tela, x.tela === "TRABALHO" ? { id: x.id } : {}); });
+    f.addEventListener("click", () => {
+      const x = lerViva();
+      if (x) return ir(x.tela, x.tela === "TRABALHO" ? { id: x.id } : {});
+      const l = S.trabalhosVivos?.lista || [];
+      if (l.length === 1) ir("TRABALHO", { id: l[0].id }); else ir("TRABALHOS", { aba: "meus" });
+    });
     document.body.appendChild(f);
   }
-  f.innerHTML = `<b>🚗 Corrida em andamento</b><span>${esc(v.texto)}</span><i>Abrir ›</i>`;
+  if (v) { f.classList.remove("trabalho"); f.innerHTML = `<b>🚗 Corrida em andamento</b><span>${esc(v.texto)}</span><i>Abrir ›</i>`; return; }
+  f.classList.add("trabalho");
+  const l = tv.lista;
+  const um = l[0];
+  f.innerHTML = l.length === 1
+    ? `<b>${esc(um.titulo)}</b><span>${esc(um.fase.texto)}</span>${barraFases(um.fase, true)}<i>Abrir ›</i>`
+    : `<b>📋 ${l.length} trabalhos em andamento</b><span>${esc(resumoVivos(l))}</span><i>Ver ›</i>`;
+}
+
+// ---------- Fases de um trabalho (barra de progresso para quem contratou e para quem trabalha) ----------
+/**
+ * t: resumo (eventos) ou detalhe (contrato) — usa estado, modalidade, trabalhador, pendenteAprovacao, chegou, etapas.
+ * Devolve { passos: [nomes], atual (índice), texto (o que acontece agora, para quem vê), alerta? }.
+ */
+function fasesTrabalho(t, souCliente, extra = {}) {
+  const z = E.ZeroAddress;
+  const m = Number(t.modalidade);
+  const comChegada = extra.comChegada ?? t.comChegada;
+  const passos = ["Publicado", "Aceito"];
+  if (m === 0 && comChegada) passos.push("Chegou");
+  if (m === 3) passos.push(`Etapas (${t.etapasPagas || 0}/${t.etapas || 0})`);
+  else if (m !== 1) passos.push("Feito");
+  else passos.push("Entregue");
+  passos.push("Pago");
+  const ultimo = passos.length - 1;
+  const semTrab = !t.trabalhador || t.trabalhador === z;
+  let atual = 0;
+  let texto;
+  if (t.estado === 4) return { passos, atual: ultimo + 1, texto: souCliente ? "✅ Concluído e pago" : "✅ Concluído: você recebeu" };
+  if (t.estado === 5) return { passos, atual: 0, texto: "↩️ Cancelado: o valor voltou para quem contratou", cancelado: true };
+  if (t.estado === 3) return { passos, atual: ultimo, texto: "⚖️ Em disputa: aguardando acordo", alerta: true };
+  if (t.estado === 0 && t.pendenteAprovacao) { atual = 0; texto = souCliente ? "🙋 Alguém quer fazer: aprove ou recuse" : "⏳ Esperando o contratante aprovar você"; }
+  else if (t.estado === 0 && semTrab) { atual = 0; texto = souCliente ? "🔎 Procurando quem faça" : "Vaga aberta"; }
+  else if (t.estado === 0) { atual = 0; texto = souCliente ? "⏳ Esperando a pessoa aceitar" : "📩 Você foi chamado: aceite ou recuse"; }
+  else if (t.estado === 1) {
+    atual = 1;
+    if (m === 0 && comChegada && !t.chegou) texto = souCliente ? "🚶 Trabalhador a caminho" : "🚶 Vá até o local e use o código de chegada";
+    else {
+      if (m === 0 && comChegada) atual = 2;
+      if (m === 1) texto = souCliente ? "🛵 A caminho: dê o código só ao receber" : "🛵 Leve até o destino e peça o código";
+      else if (m === 3) { atual = passos.length - 2; texto = souCliente ? `🧱 Em execução: etapa ${(t.etapasPagas || 0) + 1} de ${t.etapas}` : `🧱 Faça a etapa ${(t.etapasPagas || 0) + 1} de ${t.etapas}`; }
+      else texto = souCliente ? "🛠️ Em execução" : "🛠️ Você está executando: marque como feito ao terminar";
+    }
+  } else if (t.estado === 2) { atual = ultimo; texto = souCliente ? "👀 Feito: confira e libere o pagamento" : "⏳ Feito: esperando o contratante liberar (ou 3 dias)"; }
+  return { passos, atual, texto };
+}
+
+/** Barra de fases: bolinhas numeradas por passo (feito / agora / depois). `mini` = só a barra fina. */
+function barraFases(f, mini = false) {
+  const n = f.passos.length;
+  const pct = f.cancelado ? 0 : Math.min(100, Math.round((Math.min(f.atual, n) / n) * 100 + (f.atual < n ? 100 / n / 2 : 0)));
+  if (mini) return `<span class="fases-mini ${f.alerta ? "alerta" : ""}" aria-hidden="true"><span style="width:${pct}%"></span></span>`;
+  return `<ol class="fases ${f.alerta ? "alerta" : ""} ${f.cancelado ? "cancelado" : ""}" aria-label="Andamento: ${esc(f.texto)}">${f.passos
+    .map((p, i) => `<li class="${i < f.atual ? "feito" : i === f.atual ? "agora" : ""}"${i === f.atual ? ' aria-current="step"' : ""}><i>${i < f.atual ? "✓" : i + 1}</i><span>${esc(p)}</span></li>`)
+    .join("")}</ol><p class="fase-agora ${f.alerta ? "alerta" : ""}">${esc(f.texto)}</p>`;
+}
+
+/** Meus trabalhos em andamento (sem as corridas, que têm a faixa delas), com o papel e a fase. */
+function trabalhosVivos(meus) {
+  const eu = S.endereco.toLowerCase();
+  const lista = meus
+    .filter((t) => !t.encerrado && !lerCorrida(t.descricao))
+    .map((t) => {
+      const souCliente = t.cliente.toLowerCase() === eu;
+      const fase = fasesTrabalho(t, souCliente);
+      const emExec = t.estado >= 1;
+      const titulo = souCliente ? (emExec ? "🤝 Sua contratação está em execução" : "🤝 Você tem uma contratação em aberto") : emExec ? "🛠️ Você está executando um trabalho" : "📩 Você tem um trabalho em aberto";
+      return { id: t.id, souCliente, fase, titulo, descricao: t.descricao };
+    });
+  return { lista };
+}
+function resumoVivos(l) {
+  const c = l.filter((x) => x.souCliente).length;
+  const tr = l.length - c;
+  return [c ? `${c} contratação${c > 1 ? "ões" : ""}` : "", tr ? `${tr} trabalho${tr > 1 ? "s" : ""} seu${tr > 1 ? "s" : ""}` : ""].filter(Boolean).join(" · ");
+}
+async function atualizarVivos() {
+  if (!S.escrow || !S.endereco || !S.carteira) return;
+  await S.escrow.sincronizar();
+  const { meus } = await S.escrow.listar(S.endereco);
+  S.trabalhosVivos = trabalhosVivos(meus);
 }
 setInterval(() => {
-  if (S.carteira && !document.hidden) corridaViva().then(desenharFaixaViva).catch(() => {});
+  if (S.carteira && !document.hidden) corridaViva().then(async (v) => { if (!v) await atualizarVivos().catch(() => {}); desenharFaixaViva(v); }).catch(() => {});
 }, 30_000);
 
 // ---------- Avisos de verdade (com o app em segundo plano) e plantão ----------
@@ -1454,12 +1543,13 @@ TELAS.TRABALHOS = async () => {
   });
   const [{ meus, vagas, arbitragens, arquivados }, rep] = await Promise.all([S.escrow.listar(S.endereco), S.escrow.reputacao(S.endereco)]);
   const lista = { meus, vagas, arbitragens }[aba] || meus;
+  S.trabalhosVivos = trabalhosVivos(meus);
   const card = (t) => {
     const m = ESCROW.modalidades[t.modalidade];
     const papel = t.cliente.toLowerCase() === S.endereco.toLowerCase() ? "Você contratou" : t.trabalhador.toLowerCase() === S.endereco.toLowerCase() ? "Você trabalha" : aba === "arbitragens" ? "Você é árbitro" : "Vaga aberta";
     const fim = { cancelado: "↩️ Cancelado, valor devolvido", concluido: "✅ Concluído e pago", resolvido: "⚖️ Disputa resolvida" }[t.fim];
     const [ic, ds] = iconeDesc(t.descricao, m);
-    return `<button class="item ${t.encerrado ? "arquivado" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${ic}</span><span class="meio"><b>${esc(ds)}</b><span class="mudo">#${esc(t.id)} · ${t.avaliar ? "⭐ Concluído: toque para avaliar" : fim ? esc(fim) : `${esc(m.nome)} · ${esc(papel)}`}</span></span><b>${fmt(t.valor)}</b></button>`;
+    return `<button class="item ${t.encerrado ? "arquivado" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${ic}</span><span class="meio"><b>${esc(ds)}</b><span class="mudo">#${esc(t.id)} · ${t.avaliar ? "⭐ Concluído: toque para avaliar" : fim ? esc(fim) : `${esc(m.nome)} · ${esc(papel)}`}</span>${!t.encerrado && (aba === "meus") ? (() => { const f = fasesTrabalho(t, t.cliente.toLowerCase() === S.endereco.toLowerCase()); return `<span class="fase-item ${f.alerta ? "alerta" : ""}">${esc(f.texto)}</span>${barraFases(f, true)}`; })() : ""}</span><b>${fmt(t.valor)}</b></button>`;
   };
   tela(`
     <h1>Trabalhos</h1>
@@ -2858,6 +2948,7 @@ TELAS.TRABALHO = async () => {
     <p class="mudo">#${esc(t.id)} · ${esc(cor.nomeCategorias)}${cor.km != null ? ` · ${brNum(cor.km, 1)} km` : ""}${cor.expresso ? " · ⚡ Expresso" : ""}${cor.agendada ? ` · ⏰ ${esc(horaCurta(cor.agendada))}` : ""}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
     <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>${blocoCorrida(t, souCliente)}` : `<h1>${iconeDesc(resumo?.descricao, m).map((x, i) => (i ? esc(x) : x)).join(" ")}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
+    ${barraFases(fasesTrabalho(t, souCliente, { comChegada: resumo?.comChegada }))}
     ${!ativo ? `<div class="ok">📁 <b>Arquivado.</b> ${t.estado === 5 ? "Cancelado: o valor travado voltou para a carteira de quem contratou." : "Concluído: o pagamento já foi feito."} Os códigos deste trabalho não valem mais.</div>` : ""}
     <div class="cartao">
       <div class="linha"><span>Valor</span><b>${fmt(t.valor)} BRLS</b></div>

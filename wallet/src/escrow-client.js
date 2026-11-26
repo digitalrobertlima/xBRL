@@ -197,6 +197,10 @@ export class EscrowClient {
           caucao: 0n,
           txCriacao: ev.tx,
           txAceite: null,
+          estado: 0, // estado deduzido dos eventos (para a barra de fases sem ler o contrato de novo)
+          chegou: false,
+          etapasPagas: 0,
+          pendenteAprovacao: false,
         });
       }
       const t = mapa.get(id);
@@ -206,7 +210,13 @@ export class EscrowClient {
         t.trabalhador = ev.args.trabalhador;
         t.candidato = null;
         t.txAceite ||= ev.tx;
+        t.pendenteAprovacao = false;
+        if (t.estado < 1) t.estado = 1;
       }
+      if (ev.nome === "ChegadaConfirmada" || ev.nome === "ChegadaConfirmadaPeloCliente") t.chegou = true;
+      if (ev.nome === "EntregaMarcada" && t.estado < 2) t.estado = 2;
+      if (ev.nome === "Pagamento") t.etapasPagas += 1;
+      if (ev.nome === "DisputaAberta") t.estado = 3;
       if (ev.nome === "TrabalhoConfigurado") {
         if (ev.args.arbitroCliente !== e().ZeroAddress) t.arbitros = [ev.args.arbitroCliente];
         t.caucao = BigInt(ev.args.caucao);
@@ -216,12 +226,13 @@ export class EscrowClient {
       if (ev.nome === "CandidaturaRecebida") {
         t.candidato = ev.args.candidato;
         t.txAceite = ev.tx;
+        t.pendenteAprovacao = true;
       }
-      if (ev.nome === "CandidaturaEncerrada") t.candidato = null;
+      if (ev.nome === "CandidaturaEncerrada") { t.candidato = null; t.pendenteAprovacao = false; }
       // Terminou (vai para "Arquivados"): cancelado/reembolsado, pago ao trabalhador ou disputa resolvida
-      if (ev.nome === "TrabalhoCancelado") Object.assign(t, { encerrado: true, fim: "cancelado" });
-      if (ev.nome === "TrabalhoConcluido") Object.assign(t, { encerrado: true, fim: "concluido" });
-      if (ev.nome === "DisputaResolvida") Object.assign(t, { encerrado: true, fim: "resolvido" });
+      if (ev.nome === "TrabalhoCancelado") Object.assign(t, { encerrado: true, fim: "cancelado", estado: 5 });
+      if (ev.nome === "TrabalhoConcluido") Object.assign(t, { encerrado: true, fim: "concluido", estado: 4 });
+      if (ev.nome === "DisputaResolvida") Object.assign(t, { encerrado: true, fim: "resolvido", estado: 4 });
       if (ev.nome === "Avaliacao") (t.avaliadores ||= []).push(String(ev.args.avaliador).toLowerCase());
     }
     return mapa;

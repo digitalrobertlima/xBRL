@@ -272,10 +272,11 @@ export class EscrowClient {
     const souCriador = eu === CREATOR_TREASURY.toLowerCase();
     for (const t of mapa.values()) {
       const souCliente = t.cliente.toLowerCase() === eu;
-      const souTrab = (t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu);
+      // Sem carteira (conta = 0x000…): a vaga aberta tem trabalhador = 0x000…, e isso NÃO é "sou o trabalhador"
+      const souTrab = eu !== zero.toLowerCase() && ((t.trabalhador && t.trabalhador.toLowerCase() === eu) || (t.candidato && t.candidato.toLowerCase() === eu));
       const souArbitro = t.arbitros.some((x) => x.toLowerCase() === eu) || (souCriador && t.desempateCriador);
       const aberta = t.trabalhador === zero && !t.candidato && !t.encerrado && t.prazo > Math.floor(Date.now() / 1000);
-      if (souCliente || souTrab) meus.push(t);
+      if ((souCliente && eu !== zero.toLowerCase()) || souTrab) meus.push(t);
       else if (souArbitro) arbitragens.push(t);
       else if (aberta) vagas.push(t);
     }

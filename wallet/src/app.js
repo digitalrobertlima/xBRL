@@ -422,6 +422,8 @@ function conectarExterna(conexao) {
   S.ultimoUso = Date.now();
   conexao.aoTrocarConta?.((novo) => {
     if (!novo || !E.isAddress(novo)) return;
+    // A carteira de fora pode avisar a mesma conta de novo (ex.: ao atualizar saldos): nada muda, nada recarrega.
+    if (S.endereco && E.getAddress(novo) === E.getAddress(S.endereco)) return;
     conectarExterna({ ...conexao, endereco: E.getAddress(novo) });
     toast("Conta trocada na carteira conectada");
     render();

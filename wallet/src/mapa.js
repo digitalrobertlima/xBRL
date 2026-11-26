@@ -100,17 +100,29 @@ async function nominatim(caminho) {
   return r.json();
 }
 
-/** Endereço curto ("Rua X, 100 – Savassi, Belo Horizonte") e o bairro público ("Savassi, Belo Horizonte"). */
-export function resumirEndereco(res) {
+// "Regional Sede", "Regional Norte"…: região administrativa da prefeitura, não é bairro.
+const naoEhBairro = (x) => !x || /^(regional|região|distrito|subprefeitura)\b/i.test(x);
+
+/** Partes do endereço vindas do OpenStreetMap. O bairro de lá nem sempre está certo: a pessoa confere. */
+export function partesEndereco(res) {
   const a = res?.address || {};
-  const rua = [a.road || a.pedestrian || a.footway || a.path || a.square || a.place || "", a.house_number || ""].filter(Boolean).join(", ");
-  const bairro = a.suburb || a.neighbourhood || a.quarter || a.city_district || a.hamlet || "";
+  const rua = a.road || a.pedestrian || a.footway || a.path || a.square || a.place || "";
+  const bairro = [a.suburb, a.neighbourhood, a.quarter, a.hamlet, a.city_district].find((x) => !naoEhBairro(x)) || "";
   const cidade = a.city || a.town || a.village || a.municipality || "";
-  const nome = res?.name && !rua.startsWith(res.name) ? res.name : "";
-  const partes = [nome, rua, [bairro, cidade].filter(Boolean).join(", ")].filter(Boolean);
-  const endereco = partes.join(" – ") || String(res?.display_name || "").split(",").slice(0, 3).join(",");
-  return { endereco: endereco.slice(0, 110), bairro: [bairro, cidade].filter(Boolean).join(", ").slice(0, 40) };
+  const nome = res?.name && res.name !== rua ? res.name : "";
+  return { nome, rua, numero: a.house_number || "", bairro, cidade, exibicao: String(res?.display_name || "") };
 }
+
+/** Monta "Rua X, 100 – Bairro, Cidade" (e o bairro público "Bairro, Cidade"). */
+export function montarEndereco({ nome = "", rua = "", numero = "", bairro = "", cidade = "", exibicao = "" }) {
+  const linhaRua = [rua, numero].filter(Boolean).join(", ");
+  const local = [bairro, cidade].filter(Boolean).join(", ");
+  const endereco = [nome, linhaRua, local].filter(Boolean).join(" – ") || exibicao.split(",").slice(0, 3).join(",");
+  return { endereco: endereco.slice(0, 110), bairro: local.slice(0, 40) };
+}
+
+/** Endereço curto ("Rua X, 100 – Savassi, Belo Horizonte") e o bairro público ("Savassi, Belo Horizonte"). */
+export const resumirEndereco = (res) => ({ ...montarEndereco(partesEndereco(res)), partes: partesEndereco(res) });
 
 export const buscarEndereco = async (q) => (await nominatim(`/search?q=${encodeURIComponent(q)}&limit=6&countrycodes=br`)).map((r) => ({ lat: Number(r.lat), lon: Number(r.lon), ...resumirEndereco(r) }));
 export const enderecoDoPonto = async (lat, lon) => resumirEndereco(await nominatim(`/reverse?lat=${lat}&lon=${lon}&zoom=18`));
@@ -130,7 +142,7 @@ function lerUltimo() {
 export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = null, dica = "" } = {}) {
   return new Promise((resolver) => {
     const ult = inicial || lerUltimo();
-    const st = { lat: ult?.lat ?? -15.79, lon: ult?.lon ?? -47.88, z: inicial ? 17 : ult ? 15 : 4, info: inicial ? { endereco: inicial.endereco, bairro: inicial.bairro } : null };
+    const st = { lat: ult?.lat ?? -15.79, lon: ult?.lon ?? -47.88, z: inicial ? 17 : ult ? 15 : 4, info: inicial ? { endereco: inicial.endereco, bairro: inicial.bairro, partes: inicial.partes } : null };
     const raiz = document.createElement("div");
     raiz.className = "mapa-folha";
     raiz.setAttribute("role", "dialog");
@@ -149,7 +161,11 @@ export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = 
       </div>
       <div class="mapa-base">
         <p class="mapa-end" aria-live="polite">${dica ? esc(dica) : "Arraste o mapa até a ponta do pino ficar no lugar exato."}</p>
-        <input class="mapa-compl" maxlength="60" placeholder="Número, apartamento, referência (opcional)" value="${esc(inicial?.complemento || "")}">
+        <div class="mapa-campos">
+          <input class="mapa-num" maxlength="10" inputmode="numeric" placeholder="Número" aria-label="Número" value="${esc(inicial?.partes?.numero || "")}">
+          <input class="mapa-bairro" maxlength="34" placeholder="Bairro (confira)" aria-label="Bairro" value="${esc(inicial?.partes?.bairro || "")}">
+        </div>
+        <input class="mapa-compl" maxlength="60" placeholder="Complemento ou referência (opcional)" value="${esc(inicial?.complemento || "")}">
         <button class="btn prim mapa-ok" type="button">Confirmar este ponto</button>
       </div>`;
     document.body.appendChild(raiz);
@@ -209,6 +225,7 @@ export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = 
           if (meu !== pedidoEnd) return;
           st.info = info;
           linhaEnd.textContent = info.endereco || "Ponto marcado (sem nome de rua aqui).";
+          preencher(info.partes);
         } catch {
           if (meu === pedidoEnd) linhaEnd.textContent = "Ponto marcado. (Não deu para achar o nome da rua agora, mas a coordenada é exata.)";
         }
@@ -222,6 +239,15 @@ export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = 
       endDepois();
     };
     const zoom = (d) => mover(st.lat, st.lon, st.z + d);
+    // Número e bairro: vêm do mapa, mas quem manda é a pessoa (o bairro do mapa às vezes está errado)
+    const campoNum = $(".mapa-num");
+    const campoBairro = $(".mapa-bairro");
+    for (const c of [campoNum, campoBairro]) c.addEventListener("input", () => (c.dataset.mexeu = "1"));
+    const preencher = (p) => {
+      if (!p) return;
+      if (!campoNum.dataset.mexeu && p.numero) campoNum.value = p.numero;
+      if (!campoBairro.dataset.mexeu) campoBairro.value = p.bairro || "";
+    };
 
     // Arrastar e pinçar
     const dedos = new Map();
@@ -305,9 +331,12 @@ export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = 
         caixaRes.innerHTML = res.length
           ? res.map((r, i) => `<button type="button" data-i="${i}">📍 ${esc(r.endereco)}</button>`).join("") + `<p class="mudo">Toque no certo e ajuste o pino arrastando o mapa.</p>`
           : `<p class="mudo">Não achei. Tente com o nome da cidade (ex.: "Rua da Bahia 1000, Belo Horizonte") ou arraste o mapa até o ponto.</p>`;
+        // O número digitado na busca vale mais que o do mapa
+        const numBusca = /\b(\d{1,5})\b(?!.*\d)/.exec(q)?.[1] || "";
         caixaRes.querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => {
           const r = res[Number(b.dataset.i)];
           caixaRes.hidden = true;
+          if (numBusca && !campoNum.dataset.mexeu) { campoNum.value = numBusca; campoNum.dataset.mexeu = "1"; }
           mover(r.lat, r.lon, 18);
         }));
       } catch {
@@ -332,7 +361,9 @@ export function escolherPonto({ titulo = "📍 Marque o ponto exato", inicial = 
       const lat = Number(st.lat.toFixed(5));
       const lon = Number(st.lon.toFixed(5));
       try { localStorage.setItem(CHAVE_ULTIMO, JSON.stringify({ lat, lon })); } catch { /* sem armazenamento */ }
-      fechar({ lat, lon, endereco: st.info?.endereco || "", bairro: st.info?.bairro || "", complemento: $(".mapa-compl").value.trim().slice(0, 60) });
+      const partes = { ...(st.info?.partes || {}), numero: campoNum.value.trim(), bairro: campoBairro.value.trim() };
+      const m = montarEndereco(partes);
+      fechar({ lat, lon, endereco: m.endereco || st.info?.endereco || "", bairro: m.bairro, partes, complemento: $(".mapa-compl").value.trim().slice(0, 60) });
     });
 
     pedirDesenho();

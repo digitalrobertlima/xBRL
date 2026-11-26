@@ -20,6 +20,7 @@ import qrcode from "./vendor/qrcode.mjs";
 import { VEICULOS, VALIDADES_HORAS, descricaoCorrida, lerCorrida, enderecoCorrida, passoCorrida } from "./corrida.js";
 import { escolherPonto, botoesGps, textoDoPonto, coordenadasNoTexto, fmtCoord } from "./mapa.js";
 import * as CO from "./correio.js";
+import { CATEGORIAS, CAT, STATUS, ENTREGAS, MAX_FOTOS, Vitrine, codificar, conversaVitrine, montarItens, novoId, precoBr } from "./vitrine.js";
 
 const E = globalThis.ethers;
 const $ = (s, r = document) => r.querySelector(s);
@@ -50,7 +51,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["CORRIDA", "MOTORISTA", "INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["VITRINE", "ANUNCIO", "ANUNCIAR", "MEUS_ANUNCIOS", "LOJA_EDITAR", "LOJA", "SACOLA", "CORRIDA", "MOTORISTA", "INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA", "INICIO"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS", "INICIO"],
@@ -78,7 +79,7 @@ function ir(destino, params = {}) {
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta || !!S.externa;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
-  const aba = { CORRIDA: "TRABALHOS", MOTORISTA: "TRABALHOS", TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
+  const aba = { ANUNCIO: "VITRINE", ANUNCIAR: "VITRINE", MEUS_ANUNCIOS: "VITRINE", LOJA_EDITAR: "VITRINE", LOJA: "VITRINE", SACOLA: "VITRINE", CORRIDA: "TRABALHOS", MOTORISTA: "TRABALHOS", TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
   if (aberta) history.replaceState({ tela: destino }, "", location.pathname + location.search);
   window.scrollTo(0, 0);
@@ -250,6 +251,7 @@ async function conectarRede(chainId) {
   S.escrow = S.imp ? new EscrowClient(S.provider, chainId, S.imp.EscrowTrabalho, S.imp.blocoInicial) : null;
   S.chat = S.imp ? new Chat(S.provider, S.imp.Mensageiro, S.imp.blocoInicial) : null;
   if (S.chat) S.chat.encaminhador = S.imp.Encaminhador || null;
+  S.vitrine = S.imp?.Mensageiro ? new Vitrine(S.provider, chainId, S.imp.Mensageiro, S.imp.blocoInicial) : null;
   const chip = $("#rede");
   chip.textContent = S.rede.curto;
   chip.classList.toggle("teste", chainId !== 137);
@@ -544,7 +546,8 @@ TELAS.VAGAS_PUBLICAS = async () => {
     <p class="mudo">Trabalhos com o pagamento já travado no contrato: quem fizer, recebe. Para aceitar uma vaga, crie sua carteira (é grátis e leva 1 minuto).</p>
     ${vagas.map((t) => {
       const m = ESCROW.modalidades[t.modalidade];
-      return `<div class="item"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">${esc(m.nome)} · prazo ${esc(new Date(t.prazo * 1000).toLocaleDateString("pt-BR"))}</span></span><b>${reais(t.valor)}</b></div>`;
+      const [ic, ds] = iconeDesc(t.descricao, m);
+      return `<div class="item"><span class="ic">${ic}</span><span class="meio"><b>${esc(ds)}</b><span class="mudo">${esc(m.nome)} · prazo ${esc(new Date(t.prazo * 1000).toLocaleDateString("pt-BR"))}</span></span><b>${reais(t.valor)}</b></div>`;
     }).join("") || `<div class="cartao"><p class="mudo">Nenhuma vaga aberta agora. Volte mais tarde!</p></div>`}
     <button class="btn prim" data-acao="criar">Quero trabalhar: criar minha carteira</button>
     <button class="btn sec" data-ir="BOAS_VINDAS">Voltar</button>`);
@@ -700,6 +703,7 @@ TELAS.INICIO = async () => {
       <button class="atalho" data-ir="RECEBER"><span>📥</span>Receber</button>
       <button class="atalho" data-ir="RESERVA"><span>🪙</span>Comprar</button>
       <button class="atalho" data-acao="modo-resgatar"><span>💵</span>Resgatar</button>
+      <button class="atalho" data-ir="VITRINE"><span>🛍️</span>Vitrine</button>
       <button class="atalho" data-ir="CORRIDA"><span>🚗</span>Corrida</button>
       <button class="atalho" data-ir="TRABALHOS"><span>🤝</span>Trabalhos</button>
       <button class="atalho" data-ir="TANQUE"><span>⛽</span>Tanque</button>
@@ -1116,7 +1120,8 @@ TELAS.TRABALHOS = async () => {
     const m = ESCROW.modalidades[t.modalidade];
     const papel = t.cliente.toLowerCase() === S.endereco.toLowerCase() ? "Você contratou" : t.trabalhador.toLowerCase() === S.endereco.toLowerCase() ? "Você trabalha" : aba === "arbitragens" ? "Você é árbitro" : "Vaga aberta";
     const fim = { cancelado: "↩️ Cancelado, valor devolvido", concluido: "✅ Concluído e pago", resolvido: "⚖️ Disputa resolvida" }[t.fim];
-    return `<button class="item ${t.encerrado ? "arquivado" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${m.icone}</span><span class="meio"><b>${esc(t.descricao || m.nome)}</b><span class="mudo">#${esc(t.id)} · ${fim ? esc(fim) : `${esc(m.nome)} · ${esc(papel)}`}</span></span><b>${fmt(t.valor)}</b></button>`;
+    const [ic, ds] = iconeDesc(t.descricao, m);
+    return `<button class="item ${t.encerrado ? "arquivado" : ""}" data-trabalho="${esc(t.id)}"><span class="ic">${ic}</span><span class="meio"><b>${esc(ds)}</b><span class="mudo">#${esc(t.id)} · ${t.avaliar ? "⭐ Concluído: toque para avaliar" : fim ? esc(fim) : `${esc(m.nome)} · ${esc(papel)}`}</span></span><b>${fmt(t.valor)}</b></button>`;
   };
   tela(`
     <h1>Trabalhos</h1>
@@ -1155,6 +1160,611 @@ document.addEventListener("click", (ev) => {
   window.parent.postMessage({ brls: 1, tipo: "gps", lat, lon, app: a.dataset.app }, "*");
   toast("Abrindo no GPS…");
 }, true);
+
+// =====================================================================
+// Vitrine (vitrine.js): anúncios, lojas de comida, sacola e Pix ⇄ BRLS — sem contrato novo.
+// Comprar/contratar = trabalho do EscrowTrabalho. Comida com entregador = DOIS trabalhos ligados:
+//   A) produto, ENTREGA designada à loja, código C1 (o entregador entrega C1 à loja na retirada → loja recebe);
+//   B) entrega, ENTREGA com vaga aberta, código C2 (o cliente dá C2 na porta → entregador recebe).
+// =====================================================================
+const vit = () => S.vitrine;
+const refAnuncio = (a) => a.id.slice(0, 8);
+const reaisTxt = (v) => `R$ ${precoBr(v)}`;
+
+/** Cria um trabalho já pronto (usado pela vitrine). Devolve { p, codigo, chegada, chaveEnd }. */
+function prepararTrabalho({ modalidade, trabalhador = E.ZeroAddress, valor, horas = 72, descricao, comCodigo = true, privado = "" }) {
+  const palavras = valor >= E.parseEther("1000") ? 6 : 5;
+  const codigo = modalidade === 1 || comCodigo ? gerarCodigoEntrega(palavras) : null;
+  const codigoHash = codigo ? hashCodigo(S.imp.EscrowTrabalho, S.endereco, codigo) : E.ZeroHash;
+  if (codigo) guardarCodigo(codigoHash, codigo);
+  const chegada = modalidade === 0 ? gerarCodigoEntrega(palavras) : null;
+  const chegadaHash = chegada ? hashChegada(S.imp.EscrowTrabalho, S.endereco, chegada) : E.ZeroHash;
+  if (chegada) guardarCodigo(chegadaHash, chegada);
+  const p = {
+    modalidade, trabalhador, valor, prazo: BigInt(agora() + horas * 3600), etapas: 1, codigoHash, chegadaHash,
+    arbitroCliente: E.ZeroAddress, desempateCriador: false, caucao: 0n, devolucaoHash: E.ZeroHash, descricao: String(descricao).slice(0, 280),
+  };
+  const chaveEnd = modalidade === 0 ? chegadaHash : codigoHash;
+  if (privado) try { localStorage.setItem(`xbrl.endereco.${chaveEnd}`, privado); } catch { /* sem armazenamento */ }
+  return { p, codigo, chegada, chaveEnd };
+}
+
+async function conferirSaldos(valor, kit = 0n) {
+  const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
+  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e precisa de ${fmt(valor)}. Compre BRLS com Pix na Vitrine (💱) ou na aba Reserva.`);
+  if (saldoPol < kit + E.parseEther("0.03")) throw new Error(`Falta POL para a taxa da rede${kit ? ` e o gás de ${fmt(kit, 18, 2)} POL` : ""}. Abasteça na tela Tanque.`);
+}
+
+// ---------- Tela: Vitrine ----------
+TELAS.VITRINE = async () => {
+  if (!S.imp?.Mensageiro) return tela(`<h1>🛍️ Vitrine</h1><div class="aviso">A vitrine ainda não existe nesta rede.</div>`);
+  S.vitrineFiltro ||= { cat: "comida", busca: "" };
+  const f = S.vitrineFiltro;
+  const sacola = lerSacola();
+  tela(`
+    <h1>🛍️ Vitrine</h1>
+    <div class="cats" role="group" aria-label="Categorias">${CATEGORIAS.map((x) => `<button data-acao="vit-cat-${x.id}" aria-pressed="${x.id === f.cat}"><span>${x.icone}</span>${esc(x.nome)}</button>`).join("")}</div>
+    <input id="vit-busca" type="search" placeholder="Procurar: pizza, bicicleta, diarista…" value="${esc(f.busca)}" aria-label="Procurar na vitrine">
+    ${sacola.itens.length ? `<button class="btn prim" data-ir="SACOLA">🛍️ Ver sacola · ${sacola.itens.reduce((s, i) => s + i.qtd, 0)} ${sacola.itens.length === 1 && sacola.itens[0].qtd === 1 ? "item" : "itens"} · ${reaisTxt(totalSacola(sacola))}</button>` : ""}
+    <div id="vit-lista"><div class="cartao"><div class="giro"></div><p class="mudo">Lendo a vitrine na blockchain…</p></div></div>
+    <div class="grade duas"><button class="atalho" data-ir="ANUNCIAR"><span>➕</span>Anunciar</button><button class="atalho" data-ir="MEUS_ANUNCIOS"><span>🗂️</span>Meus anúncios e loja</button></div>
+    <p class="mudo">Os anúncios ficam na blockchain: ninguém apaga nem censura. Só quem anunciou pode editar, pausar ou encerrar. O dinheiro de cada compra fica travado no contrato até a entrega (código).</p>`);
+  $("#vit-busca")?.addEventListener("input", (ev) => { f.busca = ev.target.value; desenharVitrine(); });
+  await vit().sincronizar().catch(() => {});
+  desenharVitrine();
+  vigiar("VITRINE", async () => { await vit().sincronizar(); desenharVitrine(); }, 20000);
+};
+
+function cartaoAnuncio(a) {
+  const k = CAT[a.cat];
+  const preco = a.cat === "pix" ? `${a.pix.lado === "vendo" ? "vende" : "compra"} BRLS` : a.preco ? reaisTxt(a.preco) : "a combinar";
+  return `<button class="item anuncio" data-anuncio="${esc(a.chave)}"><span class="ic foto" data-foto="${esc(a.chave)}">${a.fotos?.length ? "" : k.icone}</span><span class="meio"><b>${esc(a.titulo)}</b><span class="mudo">${esc(a.bairro || "")}${a.status !== "ativo" ? ` · ${esc(STATUS[a.status])}` : ""}</span></span><b>${esc(preco)}</b></button>`;
+}
+
+function desenharVitrine() {
+  const box = $("#vit-lista");
+  if (!box) return;
+  const f = S.vitrineFiltro;
+  const q = f.busca.trim().toLowerCase();
+  const casa = (a) => !q || `${a.titulo} ${a.desc} ${a.bairro} ${(a.specs || []).flat().join(" ")}`.toLowerCase().includes(q);
+  let html = "";
+  if (f.cat === "comida") {
+    const lojas = vit().lojas().filter((l) => !q || `${l.nome} ${l.desc} ${l.bairro}`.toLowerCase().includes(q));
+    html += lojas.length ? `<h2>Lojas</h2>${lojas.map((l) => `<button class="item loja" data-loja="${esc(l.de)}"><span class="ic foto" data-foto="${esc(l.chave)}">${l.fotos?.length ? "" : "🏪"}</span><span class="meio"><b>${esc(l.nome)}</b><span class="mudo">${esc(l.bairro)}${l.horario ? ` · ${esc(l.horario)}` : ""} · entrega ${l.taxa && Number(l.taxa) > 0 ? reaisTxt(l.taxa) : "grátis"}</span></span><b>›</b></button>`).join("")}` : "";
+  }
+  if (f.cat === "pix") {
+    const ofertas = vit().anuncios({ cat: "pix" }).filter(casa);
+    const vendem = ofertas.filter((a) => a.pix.lado === "vendo");
+    const compram = ofertas.filter((a) => a.pix.lado === "compro");
+    html += `<div class="ok">💱 <b>Pix ⇄ BRLS de pessoa para pessoa.</b> O BRLS fica travado no contrato até quem recebe o Pix confirmar. Comece com valores pequenos e prefira quem tem reputação.</div>
+      <h2>Comprar BRLS com Pix</h2>${vendem.map(cartaoAnuncio).join("") || `<p class="mudo">Ninguém vendendo BRLS agora.</p>`}
+      <h2>Vender BRLS e receber Pix</h2>${compram.map(cartaoAnuncio).join("") || `<p class="mudo">Ninguém comprando BRLS agora.</p>`}
+      <button class="btn sec" data-acao="vit-anunciar-pix">💱 Quero ser um caixa (oferecer Pix ⇄ BRLS)</button>`;
+  } else {
+    const lista = vit().anuncios({ cat: f.cat }).filter(casa);
+    html += `${f.cat === "comida" ? "<h2>Pratos</h2>" : ""}${lista.map(cartaoAnuncio).join("") || `<div class="cartao"><p class="mudo">Nada anunciado aqui ainda. Que tal ser o primeiro? Toque em ➕ Anunciar.</p></div>`}`;
+    if (f.cat === "farmacia") html += `<p class="mudo">⚠️ Remédio que exige receita (tarja vermelha ou preta) não pode ser vendido aqui.</p>`;
+  }
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+    carregarMiniaturas(box);
+  }
+}
+
+async function carregarMiniaturas(raiz) {
+  for (const el of $$("[data-foto]", raiz)) {
+    const item = vit().item(el.dataset.foto);
+    if (!item?.fotos?.length) continue;
+    vit().fotos(item).then((urls) => { if (urls[0]) el.innerHTML = `<img src="${urls[0]}" alt="">`; }).catch(() => {});
+  }
+}
+
+document.addEventListener("click", (ev) => {
+  const a = ev.target.closest("[data-anuncio]");
+  if (a) return ir("ANUNCIO", { chave: a.dataset.anuncio });
+  const l = ev.target.closest("[data-loja]");
+  if (l) return ir("LOJA", { conta: l.dataset.loja });
+});
+
+// ---------- Tela: um anúncio ----------
+TELAS.ANUNCIO = async () => {
+  const a = vit().item(S.params.chave);
+  if (!a) return tela(`<h1>Anúncio</h1><div class="aviso">Anúncio não encontrado.</div><button class="btn sec" data-ir="VITRINE">Voltar</button>`);
+  const meu = a.de.toLowerCase() === S.endereco.toLowerCase();
+  const rep = await S.escrow.reputacao(a.de).catch(() => null);
+  const k = CAT[a.cat];
+  const pix = a.cat === "pix" ? a.pix : null;
+  tela(`
+    <div id="an-fotos" class="fotos"></div>
+    <h1>${k.icone} ${esc(a.titulo)}</h1>
+    ${a.status !== "ativo" ? `<div class="aviso">Este anúncio está <b>${esc(STATUS[a.status].toLowerCase())}</b>.</div>` : ""}
+    ${pix ? `<div class="cartao"><div class="linha"><span>${pix.lado === "vendo" ? "Vende BRLS, recebe Pix" : "Compra BRLS, paga Pix"}</span><b>R$ ${precoBr(pix.min)} a ${precoBr(pix.max)}</b></div>
+        <div class="linha"><span>Prêmio de quem ${pix.lado === "vendo" ? "vende" : "paga o Pix"}</span><b>${String(pix.premio).replace(".", ",")}%</b></div>
+        ${pix.banco ? `<div class="linha"><span>Banco</span><span>${esc(pix.banco)}</span></div>` : ""}</div>`
+      : `<p class="preco">${a.preco ? esc(reaisTxt(a.preco)) : "Preço a combinar"}</p>`}
+    ${a.desc ? `<p style="white-space:pre-line">${esc(a.desc)}</p>` : ""}
+    ${a.specs?.length ? `<div class="cartao specs">${a.specs.map(([n, v]) => `<div class="linha"><span>${esc(n)}</span><b>${esc(v)}</b></div>`).join("")}</div>` : ""}
+    ${a.opcoes?.length ? `<div class="cartao"><b>Opções</b>${a.opcoes.map((o) => `<div class="linha"><span>${esc(o.nome)}</span><span>${Number(o.extra) > 0 ? "+ " + esc(reaisTxt(o.extra)) : "sem custo"}</span></div>`).join("")}</div>` : ""}
+    <div class="cartao">
+      <div class="linha"><span>Onde</span><span>${esc(a.bairro || "—")}</span></div>
+      ${a.cat !== "pix" && a.cat !== "servicos" ? `<div class="linha"><span>Entrega</span><span>${esc(ENTREGAS[a.entrega])}</span></div>` : ""}
+      ${a.servico ? `<div class="linha"><span>Serviço</span><span>${a.servico === "presencial" ? "No local" : "À distância"}</span></div>` : ""}
+      <div class="linha"><span>Anunciante</span><span>${esc(curto(a.de))} ${rep ? `${estrelasNivel(rep.nivel)} <small class="mudo">${Number(rep.contrapartes)} ${Number(rep.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rep.idadeDias} dias</small>` : ""}</span></div>
+    </div>
+    <div id="an-acao"></div>
+    ${meu ? `<h2>Seu anúncio</h2>
+      <button class="btn sec" data-acao="an-editar">✏️ Editar</button>
+      ${a.status === "ativo" ? `<button class="btn sec" data-acao="an-status-pausado">⏸️ Pausar</button>` : `<button class="btn sec" data-acao="an-status-ativo">▶️ Reativar</button>`}
+      ${a.cat !== "pix" && a.cat !== "servicos" ? `<button class="btn sec" data-acao="an-status-vendido">✅ Marcar como vendido</button>` : ""}
+      <button class="btn perigo" data-acao="an-status-encerrado">🗑️ Encerrar anúncio</button>
+      <p class="mudo">O anúncio continua na blockchain, mas some da vitrine quando pausado, vendido ou encerrado.</p>` : ""}
+    <button class="btn sec" data-ir="VITRINE">Voltar à vitrine</button>`);
+  vit().fotos(a).then((urls) => { const b = $("#an-fotos"); if (b && urls.length) b.innerHTML = urls.map((u) => `<img src="${u}" alt="Foto do anúncio">`).join(""); }).catch(() => {});
+  if (!meu && a.status === "ativo") desenharAcaoAnuncio(a);
+};
+
+function desenharAcaoAnuncio(a) {
+  const box = $("#an-acao");
+  if (a.cat === "pix") {
+    const p = a.pix;
+    box.innerHTML = p.lado === "vendo"
+      ? `<div class="cartao"><h2 style="margin-top:0">Comprar BRLS com Pix</h2>
+          <label for="pix-reais">Quanto você vai pagar no Pix (R$ ${precoBr(p.min)} a ${precoBr(p.max)})</label><input id="pix-reais" class="grande" inputmode="decimal" placeholder="0,00">
+          <p class="mudo" id="pix-recebe">Você recebe em BRLS o valor menos ${String(p.premio).replace(".", ",")}% (o prêmio de quem vende).</p>
+          <ol class="passos-mini"><li>Você pede. O vendedor trava os BRLS no contrato, para você.</li><li>Você paga o Pix na chave dele e toca em "Já paguei".</li><li>Ele confere e libera. Se ele sumir, você recebe sozinho em 3 dias.</li></ol>
+          ${botaoSegurar("pedir para comprar", "pix-pedir")}</div>`
+      : `<div class="cartao"><h2 style="margin-top:0">Vender BRLS e receber Pix</h2>
+          <label for="pix-reais">Quantos reais você quer receber no Pix (R$ ${precoBr(p.min)} a ${precoBr(p.max)})</label><input id="pix-reais" class="grande" inputmode="decimal" placeholder="0,00">
+          <label for="pix-minha-chave">Sua chave Pix (vai cifrada, só para ele)</label><input id="pix-minha-chave" maxlength="80" placeholder="De preferência uma chave aleatória">
+          <p class="mudo" id="pix-recebe">Você trava em BRLS o valor mais ${String(p.premio).replace(".", ",")}% (o prêmio de quem paga o Pix).</p>
+          <ol class="passos-mini"><li>Você trava os BRLS no contrato, para ele.</li><li>Ele aceita, faz o Pix e avisa.</li><li>Você confere no banco e libera. Só libere depois de ver o dinheiro na conta.</li></ol>
+          ${botaoSegurar("travar BRLS e pedir o Pix", "pix-vender")}</div>`;
+    $("#pix-reais")?.addEventListener("input", (ev) => {
+      try {
+        const r = Number(String(ev.target.value).replace(/\./g, "").replace(",", "."));
+        const brls = p.lado === "vendo" ? r * (1 - p.premio / 100) : r * (1 + p.premio / 100);
+        $("#pix-recebe").textContent = r > 0 ? (p.lado === "vendo" ? `Você recebe ${precoBr(brls.toFixed(2))} BRLS.` : `Você trava ${precoBr(brls.toFixed(2))} BRLS.`) : "";
+      } catch { /* digitando */ }
+    });
+  } else if (a.cat === "comida") {
+    box.innerHTML = `<div class="cartao">
+      ${a.opcoes?.length ? `<label for="an-opcao">Opção</label><select id="an-opcao"><option value="">Sem opção</option>${a.opcoes.map((o, i) => `<option value="${i}">${esc(o.nome)}${Number(o.extra) > 0 ? ` (+ ${esc(reaisTxt(o.extra))})` : ""}</option>`).join("")}</select>` : ""}
+      <label for="an-qtd">Quantidade</label><input id="an-qtd" inputmode="numeric" value="1">
+      <label for="an-obs">Observação (opcional)</label><input id="an-obs" maxlength="40" placeholder="Ex.: sem cebola">
+      <button class="btn prim" data-acao="an-sacola">🛍️ Adicionar à sacola</button></div>`;
+  } else if (a.cat === "servicos") {
+    box.innerHTML = `<div class="cartao"><h2 style="margin-top:0">Contratar</h2>
+      ${a.servico === "presencial" ? botaoPonto("📍 Onde vai ser o serviço", S.params.ponto, "an-mapa") : ""}
+      <label for="an-valor">Valor combinado (BRLS)</label><input id="an-valor" class="grande" inputmode="decimal" value="${a.preco ? esc(precoBr(a.preco)) : ""}">
+      <label for="an-dias">Prazo (dias)</label><input id="an-dias" inputmode="numeric" value="7">
+      ${botaoSegurar("travar o pagamento e contratar", "an-contratar")}
+      <p class="mudo">O valor fica travado no contrato. ${a.servico === "presencial" ? "Na chegada, você confirma; no fim, libera o pagamento." : "Quando ficar pronto, você libera o pagamento."}</p></div>`;
+  } else {
+    box.innerHTML = `<div class="cartao"><h2 style="margin-top:0">Comprar</h2>
+      <label for="an-qtd">Quantidade</label><input id="an-qtd" inputmode="numeric" value="1">
+      ${a.entrega === "combinar" ? `<p class="mudo">Retirada ou entrega a combinar pela conversa cifrada, depois que o vendedor aceitar.</p>` : botaoPonto("📍 Onde entregar", S.params.ponto, "an-mapa")}
+      ${botaoSegurar("travar o pagamento e comprar", "an-comprar")}
+      <p class="mudo">🔒 O vendedor só recebe quando você der o <b>código de entrega</b>, na hora em que estiver com o produto na mão. Nunca passe o código antes.</p></div>`;
+  }
+  ligarSegurar(box);
+}
+
+async function comprarAnuncio(servico) {
+  const a = vit().item(S.params.chave);
+  const pt = S.params.ponto;
+  const qtd = servico ? 1 : Math.max(1, Math.min(99, Number($("#an-qtd")?.value) || 1));
+  const valor = servico ? lerValor($("#an-valor").value) : lerValor(a.preco || "0") * BigInt(qtd);
+  if (valor === 0n) throw new Error("Informe o valor");
+  const precisaPonto = servico ? a.servico === "presencial" : a.entrega !== "combinar";
+  if (precisaPonto && !pt) throw new Error("Marque no mapa o endereço exato");
+  const kit = E.parseEther("0.3");
+  await conferirSaldos(valor, kit);
+  const mod = servico ? (a.servico === "presencial" ? 0 : 2) : 1;
+  const desc = `${servico ? "🧰" : "🛍️"} ${a.titulo}${qtd > 1 ? ` ×${qtd}` : ""} · ref ${refAnuncio(a)}`;
+  const privado = pt ? `${servico ? "Local do serviço" : "Entregar em"}: ${textoDoPonto(pt)}` : "";
+  const horas = servico ? Math.max(1, Math.min(365, Number($("#an-dias").value) || 7)) * 24 : 72;
+  const { p, codigo, chegada } = prepararTrabalho({ modalidade: mod, trabalhador: E.getAddress(a.de), valor, horas, descricao: desc, comCodigo: !servico, privado });
+  await executar(servico ? "Contratar" : "Comprar", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
+  modal(`<h2>✅ Pagamento travado</h2><p>${servico ? "O profissional" : "O vendedor"} recebe um pedido no app. Quando ${servico ? "ele" : "ele"} aceitar, ${privado ? "envie o endereço na tela do trabalho (vai cifrado)" : "combinem pela conversa cifrada"}.</p>
+    ${codigo ? `<p><b>🔑 Código de entrega</b> — dê <b>só</b> quando o produto estiver na sua mão:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
+    ${chegada ? `<p class="mudo">Quando o profissional chegar, confirme a chegada na tela do trabalho.</p>` : ""}
+    <p class="mudo">Tudo fica salvo na tela do trabalho, em Trabalhos.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  ir("TRABALHOS", { aba: "meus" });
+}
+
+// ---------- Tela: anunciar / editar ----------
+const SUGESTOES_SPECS = {
+  usados: ["Marca", "Modelo", "Estado", "Ano", "Tamanho", "Cor", "Garantia"],
+  comida: ["Serve", "Peso", "Ingredientes"],
+  mercado: ["Marca", "Peso/volume", "Validade"],
+  farmacia: ["Marca", "Quantidade", "Validade"],
+  servicos: ["Experiência", "Atende", "Horário", "Material incluso"],
+};
+
+TELAS.ANUNCIAR = async () => {
+  const ed = S.params.chave ? vit().item(S.params.chave) : null;
+  const cat = ed?.cat || S.params.cat || (S.vitrineFiltro?.cat ?? "usados");
+  S.anuncio = { fotos: [], ...(S.anuncio?.chave === S.params.chave ? S.anuncio : {}), chave: S.params.chave || null };
+  const a = ed ? { ...ed, pix: ed.pix && S.params.lado ? { ...ed.pix, lado: S.params.lado } : ed.pix } : { cat, specs: [], opcoes: [], entrega: cat === "comida" ? "propria" : "combinar", pix: { lado: S.params.lado || "vendo", min: "20", max: "500", premio: 1 } };
+  const specs = a.specs.length ? a.specs : (SUGESTOES_SPECS[cat] || []).slice(0, 3).map((n) => [n, ""]);
+  tela(`
+    <h1>${ed ? "✏️ Editar anúncio" : "➕ Anunciar"}</h1>
+    <label for="na-cat">Categoria</label><select id="na-cat">${CATEGORIAS.map((x) => `<option value="${x.id}" ${x.id === cat ? "selected" : ""}>${x.icone} ${esc(x.nome)}</option>`).join("")}</select>
+    ${cat === "pix" ? `
+      <div class="seg" role="group"><button data-acao="na-pix-vendo" aria-pressed="${a.pix.lado === "vendo"}">Vendo BRLS (recebo Pix)</button><button data-acao="na-pix-compro" aria-pressed="${a.pix.lado === "compro"}">Compro BRLS (pago Pix)</button></div>
+      <input type="hidden" id="na-pix-lado" value="${esc(a.pix.lado)}">
+      <label for="na-titulo">Título</label><input id="na-titulo" maxlength="80" value="${esc(a.titulo || (a.pix.lado === "vendo" ? "Vendo BRLS no Pix, atendo rápido" : "Compro BRLS, pago no Pix"))}">
+      <div class="grade duas"><div><label for="na-min">Mínimo (R$)</label><input id="na-min" inputmode="decimal" value="${esc(precoBr(a.pix.min))}"></div><div><label for="na-max">Máximo (R$)</label><input id="na-max" inputmode="decimal" value="${esc(precoBr(a.pix.max))}"></div></div>
+      <label for="na-premio">Seu prêmio (%)</label><input id="na-premio" inputmode="decimal" value="${esc(String(a.pix.premio).replace(".", ","))}">
+      ${a.pix.lado === "vendo" ? `<label for="na-chave">Sua chave Pix ALEATÓRIA (fica pública)</label><input id="na-chave" maxlength="80" placeholder="ex.: 1f3c…-…" value="${esc(a.pix.chave || "")}">
+      <p class="mudo">Use uma chave aleatória, nunca CPF ou telefone: ela aparece para todos.</p>` : ""}
+      <label for="na-banco">Banco (opcional)</label><input id="na-banco" maxlength="40" value="${esc(a.pix.banco || "")}">
+      <div class="aviso">⚠️ Quem vende BRLS só libera depois de ver o Pix <b>na conta</b> (não acredite em print). Golpistas pedem estorno do Pix depois: prefira quem tem reputação e comece pequeno.</div>`
+    : `
+      <label for="na-titulo">Título</label><input id="na-titulo" maxlength="80" placeholder="${cat === "comida" ? "Ex.: X-Burger da casa" : cat === "servicos" ? "Ex.: Diarista, faxina completa" : "Ex.: Bicicleta aro 29, 21 marchas"}" value="${esc(a.titulo || "")}">
+      <label for="na-preco">Preço (R$/BRLS)${cat === "servicos" ? " — deixe vazio se for a combinar" : ""}</label><input id="na-preco" class="grande" inputmode="decimal" placeholder="0,00" value="${a.preco ? esc(precoBr(a.preco)) : ""}">
+      <label for="na-desc">Descrição</label><textarea id="na-desc" maxlength="900" placeholder="Conte tudo: estado, o que vem junto, defeitos, como funciona…">${esc(a.desc || "")}</textarea>
+      <h2>Especificações</h2><div id="na-specs">${specs.map(([n, v]) => linhaSpec(n, v)).join("")}</div>
+      <button class="btn sec" data-acao="na-spec-mais">+ Especificação</button>
+      ${cat === "comida" ? `<h2>Opções e adicionais</h2><div id="na-opcoes">${(a.opcoes.length ? a.opcoes : []).map((o) => linhaOpcao(o.nome, o.extra)).join("")}</div><button class="btn sec" data-acao="na-opcao-mais">+ Opção (ex.: bacon + R$ 4,00)</button>` : ""}
+      ${cat === "servicos" ? `<label for="na-servico">Como é o serviço</label><select id="na-servico"><option value="presencial" ${a.servico !== "remoto" ? "selected" : ""}>No local (presencial)</option><option value="remoto" ${a.servico === "remoto" ? "selected" : ""}>À distância</option></select>`
+        : cat !== "comida" ? `<label for="na-entrega">Entrega</label><select id="na-entrega">${Object.entries(ENTREGAS).filter(([k]) => k !== "entregador").map(([k, n]) => `<option value="${k}" ${k === a.entrega ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>` : `<p class="mudo">A entrega dos pratos segue o que você escolheu no perfil da loja (Meus anúncios e loja).</p>`}
+      <h2>Fotos (até 3)</h2><input id="na-fotos" type="file" accept="image/*" multiple><div id="na-prev" class="fotos mini"></div>
+      <p class="mudo">As fotos são diminuídas no celular para caber na blockchain.${ed?.fotos?.length ? " Sem escolher fotos novas, as atuais continuam." : ""}</p>`}
+    <label for="na-bairro">Bairro e cidade (público)</label><input id="na-bairro" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(a.bairro || "")}">
+    <button class="btn sec" data-acao="na-bairro-mapa">🗺️ Pegar o bairro pelo mapa</button>
+    ${cat === "farmacia" ? `<div class="aviso">Proibido anunciar remédio que exige receita (tarja vermelha ou preta).</div>` : ""}
+    ${botaoSegurar(ed ? "publicar a nova versão" : "publicar o anúncio", "na-publicar")}
+    <p class="mudo">Publicar custa uma pequena taxa da rede (centavos de POL). Fica na blockchain para sempre; você pode editar, pausar ou encerrar quando quiser.</p>
+    <button class="btn sec" data-ir="VITRINE">Cancelar</button>`);
+  $("#na-cat").addEventListener("change", (ev) => ir("ANUNCIAR", { ...S.params, cat: ev.target.value }));
+  $("#na-fotos")?.addEventListener("change", (ev) => {
+    S.anuncio.fotos = [...ev.target.files].slice(0, MAX_FOTOS);
+    $("#na-prev").innerHTML = S.anuncio.fotos.map((f) => `<img src="${URL.createObjectURL(f)}" alt="">`).join("");
+  });
+};
+
+const linhaSpec = (n = "", v = "") => `<div class="spec"><input class="spec-n" maxlength="30" placeholder="Nome" value="${esc(n)}"><input class="spec-v" maxlength="80" placeholder="Valor" value="${esc(v)}"></div>`;
+const linhaOpcao = (n = "", v = "") => `<div class="spec"><input class="op-n" maxlength="40" placeholder="Opção" value="${esc(n)}"><input class="op-v" inputmode="decimal" placeholder="+ R$" value="${v && Number(v) > 0 ? esc(precoBr(v)) : ""}"></div>`;
+const valorDecimal = (txt) => {
+  const s = String(txt || "").trim();
+  if (!s) return null;
+  return E.formatUnits(lerValor(s), 18).replace(/\.0$/, "").replace(/(\.\d\d)\d+$/, "$1");
+};
+
+async function publicarAnuncio() {
+  const ed = S.params.chave ? vit().item(S.params.chave) : null;
+  const cat = $("#na-cat").value;
+  const ler = (id) => ($(`#${id}`)?.value || "").trim();
+  const o = { t: "a", id: ed?.id || novoId(), cat, titulo: ler("na-titulo"), bairro: ler("na-bairro"), status: ed?.status === "vendido" || ed?.status === "encerrado" ? "ativo" : ed?.status || "ativo" };
+  if (o.titulo.length < 3) throw new Error("Escreva um título");
+  if (o.bairro.length < 3) throw new Error("Informe o bairro e a cidade");
+  if (cat === "pix") {
+    const lado = ler("na-pix-lado") || "vendo";
+    o.pix = { lado, min: valorDecimal(ler("na-min")) || "10", max: valorDecimal(ler("na-max")) || "500", premio: Number(ler("na-premio").replace(",", ".")) || 0, chave: ler("na-chave"), banco: ler("na-banco") };
+    if (lado === "vendo" && o.pix.chave.length < 8) throw new Error("Informe sua chave Pix aleatória");
+    if (Number(o.pix.min) > Number(o.pix.max)) throw new Error("O mínimo é maior que o máximo");
+  } else {
+    o.preco = valorDecimal(ler("na-preco"));
+    if (cat !== "servicos" && !o.preco) throw new Error("Informe o preço");
+    o.desc = ler("na-desc");
+    o.specs = $$("#na-specs .spec").map((d) => [d.querySelector(".spec-n").value, d.querySelector(".spec-v").value]);
+    o.opcoes = $$("#na-opcoes .spec").map((d) => ({ nome: d.querySelector(".op-n").value, extra: valorDecimal(d.querySelector(".op-v").value) || "0" }));
+    o.entrega = cat === "comida" ? "propria" : ler("na-entrega") || "combinar";
+    if (cat === "servicos") o.servico = ler("na-servico") || "presencial";
+  }
+  let itens;
+  const novas = S.anuncio?.fotos || [];
+  if (novas.length || !ed?.fotos?.length) itens = await montarItens(o, novas);
+  else {
+    // Mantém as fotos atuais: reenvia os mesmos pedaços
+    await vit().fotos(ed);
+    const pedacos = vit().fotosMem.get(ed.tx) || [];
+    itens = [codificar({ ...o, fotos: ed.fotos }), ...pedacos];
+  }
+  await publicarItens(ed ? "Publicar nova versão" : "Publicar anúncio", itens);
+  S.anuncio = null;
+  await vit().sincronizar().catch(() => {});
+  ir("ANUNCIO", { chave: `${S.endereco.toLowerCase()}:${o.id}` });
+}
+
+/** Envia itens para o canal público da vitrine (Mensageiro). */
+async function publicarItens(titulo, itens) {
+  const m = c("Mensageiro", true);
+  const args = [conversaVitrine(), itens.map(() => S.endereco), itens, "0x"];
+  const r = await executar(titulo, [{ rotulo: "Publicar na blockchain", fn: (o) => m.enviar(...args, o) }]);
+  return r;
+}
+
+async function mudarStatus(status) {
+  const a = vit().item(S.params.chave);
+  await publicarItens(STATUS[status] === "Ativo" ? "Reativar anúncio" : `${STATUS[status]}`, [codificar({ t: "s", id: a.id, status })]);
+  await vit().sincronizar().catch(() => {});
+  render();
+}
+
+// ---------- Tela: meus anúncios e loja ----------
+TELAS.MEUS_ANUNCIOS = async () => {
+  await vit().sincronizar().catch(() => {});
+  const meus = vit().anuncios({ de: S.endereco, todos: true });
+  const loja = vit().loja(S.endereco);
+  await S.escrow.sincronizar().catch(() => {});
+  const { meus: trabalhos } = await S.escrow.listar(S.endereco);
+  const pedidos = trabalhos.filter((t) => t.trabalhador?.toLowerCase() === S.endereco.toLowerCase() && /^(🍔|🛍️|🧰|💱)/u.test(t.descricao));
+  tela(`
+    <h1>🗂️ Meus anúncios e loja</h1>
+    <div id="pix-pedidos"></div>
+    ${pedidos.length ? `<h2>Pedidos para você</h2>${pedidos.map((t) => `<button class="item" data-trabalho="${esc(t.id)}"><span class="ic">${esc([...t.descricao][0])}</span><span class="meio"><b>${esc(t.descricao.slice(2))}</b><span class="mudo">#${esc(t.id)} · toque para ver</span></span><b>${fmt(t.valor)}</b></button>`).join("")}` : ""}
+    ${meus.some((a) => a.cat === "pix") ? `<button class="btn sec" data-acao="pix-colar-pedido">📋 Colar um pedido Pix recebido por mensagem</button>` : ""}
+    <div id="vit-correio"></div>
+    <h2>🏪 Sua loja ${loja ? `<small class="mudo">${esc(STATUS[loja.status])}</small>` : ""}</h2>
+    <p class="mudo">Para vender comida com cardápio, crie o perfil da loja. Seus pratos (categoria Comida) aparecem nela.</p>
+    <button class="btn sec" data-ir="LOJA_EDITAR">${loja ? "✏️ Editar a loja" : "🏪 Criar minha loja"}</button>
+    ${loja ? `<button class="btn sec" data-loja="${esc(loja.de)}">👀 Ver como os clientes veem</button>` : ""}
+    <h2>Anúncios (${meus.length})</h2>
+    ${meus.map(cartaoAnuncio).join("") || `<p class="mudo">Você ainda não anunciou nada.</p>`}
+    <button class="btn prim" data-ir="ANUNCIAR">➕ Novo anúncio</button>`);
+  carregarMiniaturas($("#tela"));
+  const atualizarPix = async () => {
+    await mostrarPedidosPix($("#pix-pedidos"));
+    // Comprador sem POL aceitando o Pix (pedido sem gás): aparece aqui para você enviar por ele
+    await S.escrow.sincronizar();
+    const { meus: ms } = await S.escrow.listar(S.endereco);
+    const minhasPix = ms.filter((t) => t.cliente.toLowerCase() === S.endereco.toLowerCase() && /^(💱|🛍️|🧰|🍔)/u.test(t.descricao));
+    const det = (await Promise.all(minhasPix.slice(0, 6).map((t) => S.escrow.detalhe(t.id).catch(() => null)))).filter(Boolean);
+    await mostrarCorreio($("#vit-correio"), det, null);
+  };
+  atualizarPix().catch(() => {});
+  vigiar("MEUS_ANUNCIOS", atualizarPix, 15000);
+};
+
+// ---------- Loja (perfil) ----------
+TELAS.LOJA_EDITAR = async () => {
+  const l = vit().loja(S.endereco) || { nome: "", desc: "", horario: "", bairro: "", taxa: "0", entrega: "propria", status: "ativo" };
+  S.lojaPonto ||= l.lat != null ? { lat: l.lat, lon: l.lon, endereco: l.endereco } : null;
+  tela(`
+    <h1>🏪 ${l.nome ? "Editar a loja" : "Criar minha loja"}</h1>
+    <label for="lj-nome">Nome da loja</label><input id="lj-nome" maxlength="60" value="${esc(l.nome)}" placeholder="Ex.: Pastelândia">
+    <label for="lj-desc">Sobre a loja</label><textarea id="lj-desc" maxlength="400" placeholder="O que vende, diferenciais">${esc(l.desc)}</textarea>
+    <label for="lj-horario">Horário</label><input id="lj-horario" maxlength="80" value="${esc(l.horario)}" placeholder="Ex.: todos os dias, 11h às 23h">
+    ${botaoPonto("📍 Endereço de retirada (público, para os entregadores)", S.lojaPonto, "lj-mapa")}
+    <label for="lj-bairro">Bairro e cidade (público)</label><input id="lj-bairro" maxlength="40" value="${esc(l.bairro)}">
+    <label for="lj-entrega">Quem entrega</label><select id="lj-entrega"><option value="propria" ${l.entrega === "propria" ? "selected" : ""}>A própria loja</option><option value="entregador" ${l.entrega === "entregador" ? "selected" : ""}>Entregador da rede BRLS (carro, moto ou bicicleta)</option></select>
+    <label for="lj-taxa">Taxa de entrega (R$)</label><input id="lj-taxa" inputmode="decimal" value="${esc(precoBr(l.taxa))}">
+    <p class="mudo">Com entregador da rede, a taxa vai inteira para quem entregar.</p>
+    <label for="lj-status">Situação</label><select id="lj-status"><option value="ativo" ${l.status === "ativo" ? "selected" : ""}>Aberta (aparece na vitrine)</option><option value="pausado" ${l.status === "pausado" ? "selected" : ""}>Fechada agora</option></select>
+    <h2>Foto da fachada ou logo</h2><input id="lj-foto" type="file" accept="image/*">
+    ${botaoSegurar("publicar a loja", "lj-publicar")}
+    <button class="btn sec" data-ir="MEUS_ANUNCIOS">Voltar</button>`);
+  $("#lj-foto").addEventListener("change", (ev) => { S.lojaFoto = ev.target.files[0] || null; });
+};
+
+async function publicarLoja() {
+  const ler = (id) => ($(`#${id}`)?.value || "").trim();
+  const ant = vit().loja(S.endereco);
+  const pt = S.lojaPonto;
+  const o = { t: "l", id: "perfil", nome: ler("lj-nome"), desc: ler("lj-desc"), horario: ler("lj-horario"), bairro: ler("lj-bairro"), taxa: valorDecimal(ler("lj-taxa")) || "0", entrega: ler("lj-entrega"), status: ler("lj-status") };
+  if (o.nome.length < 2) throw new Error("Dê um nome à loja");
+  if (o.bairro.length < 3) throw new Error("Informe o bairro e a cidade");
+  if (o.entrega === "entregador" && !pt) throw new Error("Com entregador da rede, marque no mapa o endereço de retirada");
+  if (o.entrega === "entregador" && Number(o.taxa) < 1) throw new Error("Com entregador da rede, a taxa de entrega precisa ser de pelo menos R$ 1,00 (é o pagamento dele)");
+  if (pt) Object.assign(o, { lat: pt.lat, lon: pt.lon, endereco: [pt.endereco, pt.complemento].filter(Boolean).join(", ") });
+  let itens;
+  if (S.lojaFoto || !ant?.fotos?.length) itens = await montarItens(o, S.lojaFoto ? [S.lojaFoto] : []);
+  else {
+    await vit().fotos(ant);
+    itens = [codificar({ ...o, fotos: ant.fotos }), ...(vit().fotosMem.get(ant.tx) || [])];
+  }
+  await publicarItens("Publicar a loja", itens);
+  S.lojaFoto = null;
+  await vit().sincronizar().catch(() => {});
+  ir("MEUS_ANUNCIOS");
+}
+
+TELAS.LOJA = async () => {
+  const l = vit().loja(S.params.conta);
+  if (!l) return tela(`<h1>Loja</h1><div class="aviso">Loja não encontrada.</div><button class="btn sec" data-ir="VITRINE">Voltar</button>`);
+  const pratos = vit().anuncios({ cat: "comida", de: l.de });
+  const rep = await S.escrow.reputacao(l.de).catch(() => null);
+  const sacola = lerSacola();
+  tela(`
+    <div id="lj-fotos" class="fotos"></div>
+    <h1>🏪 ${esc(l.nome)}</h1>
+    <p class="mudo">${esc(l.bairro)}${l.horario ? ` · ${esc(l.horario)}` : ""} · ${rep ? `${estrelasNivel(rep.nivel)} ${esc(rep.nomeNivel)}` : ""}</p>
+    ${l.status !== "ativo" ? `<div class="aviso">A loja está fechada agora.</div>` : ""}
+    ${l.desc ? `<p style="white-space:pre-line">${esc(l.desc)}</p>` : ""}
+    <div class="cartao"><div class="linha"><span>Entrega</span><b>${l.entrega === "entregador" ? "Entregador da rede" : "A própria loja"} · ${Number(l.taxa) > 0 ? esc(reaisTxt(l.taxa)) : "grátis"}</b></div></div>
+    <h2>Cardápio</h2>${pratos.map(cartaoAnuncio).join("") || `<p class="mudo">Cardápio vazio.</p>`}
+    ${sacola.itens.length && sacola.loja?.toLowerCase() === l.de.toLowerCase() ? `<button class="btn prim" data-ir="SACOLA">🛍️ Ver sacola · ${esc(reaisTxt(totalSacola(sacola)))}</button>` : ""}
+    <button class="btn sec" data-ir="VITRINE">Voltar à vitrine</button>`);
+  carregarMiniaturas($("#tela"));
+  vit().fotos(l).then((urls) => { const b = $("#lj-fotos"); if (b && urls.length) b.innerHTML = `<img src="${urls[0]}" alt="Foto da loja">`; }).catch(() => {});
+};
+
+// ---------- Sacola (comida) ----------
+const CHAVE_SACOLA = "xbrl.sacola";
+function lerSacola() {
+  try { const s = JSON.parse(localStorage.getItem(CHAVE_SACOLA) || "null"); if (s && Array.isArray(s.itens)) return s; } catch { /* vazia */ }
+  return { loja: null, itens: [] };
+}
+const gravarSacola = (s) => { try { localStorage.setItem(CHAVE_SACOLA, JSON.stringify(s)); } catch { /* sem armazenamento */ } };
+const totalSacola = (s) => s.itens.reduce((t, i) => t + (Number(i.preco) + Number(i.extra || 0)) * i.qtd, 0).toFixed(2);
+
+function adicionarNaSacola() {
+  const a = vit().item(S.params.chave);
+  const s = lerSacola();
+  if (s.loja && s.loja.toLowerCase() !== a.de.toLowerCase() && s.itens.length) {
+    if (!confirm("A sacola tem itens de outra loja. Esvaziar e começar nesta?")) return;
+    s.itens = [];
+  }
+  const op = a.opcoes?.[Number($("#an-opcao")?.value)];
+  s.loja = a.de;
+  s.itens.push({ chave: a.chave, titulo: a.titulo, preco: a.preco, qtd: Math.max(1, Math.min(50, Number($("#an-qtd")?.value) || 1)), opcao: op?.nome || "", extra: op?.extra || "0", obs: ($("#an-obs")?.value || "").trim().slice(0, 40) });
+  gravarSacola(s);
+  toast("🛍️ Na sacola!");
+  ir("LOJA", { conta: a.de });
+}
+
+TELAS.SACOLA = async () => {
+  const s = lerSacola();
+  const l = s.loja ? vit().loja(s.loja) : null;
+  if (!s.itens.length || !l) return tela(`<h1>🛍️ Sacola</h1><p class="mudo">Sua sacola está vazia.</p><button class="btn sec" data-ir="VITRINE">Ver a vitrine</button>`);
+  const taxa = Number(l.taxa || 0);
+  const subtotal = Number(totalSacola(s));
+  tela(`
+    <h1>🛍️ Sacola · ${esc(l.nome)}</h1>
+    <div class="cartao">${s.itens.map((i, n) => `<div class="linha"><span>${i.qtd}× ${esc(i.titulo)}${i.opcao ? ` <small class="mudo">(${esc(i.opcao)})</small>` : ""}${i.obs ? ` <small class="mudo">· ${esc(i.obs)}</small>` : ""}</span><span>${esc(reaisTxt(((Number(i.preco) + Number(i.extra || 0)) * i.qtd).toFixed(2)))} <button class="mini-x" data-acao="sac-tirar" data-n="${n}" aria-label="Tirar">✕</button></span></div>`).join("")}
+      <div class="linha"><span>Entrega (${l.entrega === "entregador" ? "entregador da rede" : "a loja entrega"})</span><span>${taxa > 0 ? esc(reaisTxt(taxa.toFixed(2))) : "grátis"}</span></div>
+      <div class="linha"><b>Total</b><b>${esc(reaisTxt((subtotal + taxa).toFixed(2)))}</b></div></div>
+    ${botaoPonto("📍 Onde entregar", S.sacolaPonto, "sac-mapa")}
+    ${l.entrega === "entregador" ? `<label for="sac-veiculo">Entregador de</label><select id="sac-veiculo"><option value="">Qualquer veículo</option><option value="🚲 bicicleta">Bicicleta</option><option value="🏍️ moto">Moto</option><option value="🚗 carro">Carro</option></select>` : ""}
+    ${botaoSegurar("travar o pagamento e pedir", "sac-pedir")}
+    <p class="mudo">🔒 O dinheiro fica travado no contrato. ${l.entrega === "entregador" ? "A loja recebe quando o entregador retira o pedido; o entregador recebe quando você der o código na porta." : "A loja recebe quando você der o código na porta, com a comida na mão."}</p>
+    <button class="btn sec" data-acao="sac-limpar">Esvaziar sacola</button>`);
+};
+
+async function fazerPedidoComida() {
+  const s = lerSacola();
+  const l = vit().loja(s.loja);
+  if (!l || l.status !== "ativo") throw new Error("A loja está fechada agora");
+  const pt = S.sacolaPonto;
+  if (!pt) throw new Error("Marque no mapa onde entregar");
+  const subtotal = lerValor(totalSacola(s));
+  const taxa = lerValor(l.taxa || "0");
+  const comEntregador = l.entrega === "entregador";
+  const kitLoja = E.parseEther("0.3");
+  const kitEntregador = comEntregador ? E.parseEther("0.3") : 0n;
+  const total = subtotal + taxa;
+  await conferirSaldos(total, kitLoja + kitEntregador);
+  const resumo = s.itens.map((i) => `${i.qtd}× ${i.titulo}${i.opcao ? ` (${i.opcao})` : ""}${i.obs ? ` [${i.obs}]` : ""}`).join(", ");
+  const destino = textoDoPonto(pt);
+  if (!comEntregador) {
+    const { p, codigo } = prepararTrabalho({ modalidade: 1, trabalhador: E.getAddress(l.de), valor: total, horas: 6, descricao: `🍔 Pedido ${l.nome}: ${resumo}`, privado: `🛍️ ${resumo}\n🏁 Entregar em: ${destino}` });
+    await executar("Fazer pedido", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, total, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kitLoja }) }]);
+    gravarSacola({ loja: null, itens: [] });
+    modal(`<h2>✅ Pedido feito</h2><p>A loja vê o pedido e aceita. Depois, envie o endereço na tela do pedido (vai cifrado).</p><p><b>🔑 Código de entrega</b> — dê ao entregador <b>só com a comida na mão</b>:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+    return ir("TRABALHOS", { aba: "meus" });
+  }
+  // Dois trabalhos: A (produto → loja, código de retirada C1) e B (entrega → entregador, código de entrega C2)
+  const A = prepararTrabalho({ modalidade: 1, trabalhador: E.getAddress(l.de), valor: subtotal, horas: 6, descricao: `🍔 Pedido ${l.nome}: ${resumo} · entregador da rede`, privado: `🛍️ ${resumo}\n🛵 Um entregador da rede vai retirar e mostrar o código de retirada.` });
+  const veiculo = ($("#sac-veiculo")?.value || "").trim();
+  const lojaPt = l.lat != null ? `${l.endereco || l.bairro}\n📍 ${fmtCoord(l.lat, l.lon)}` : l.bairro;
+  const B = prepararTrabalho({
+    modalidade: 1, valor: taxa, horas: 6,
+    descricao: `🛵 Entrega: ${l.bairro} → ${pt.bairro || "a combinar"}${veiculo ? ` · ${veiculo}` : ""} · ${l.nome}`,
+    privado: `🏪 Retirada: ${l.nome} — ${lojaPt}\n🔑 Código de retirada (dê à loja ao pegar o pedido): ${A.codigo}\n🛍️ ${resumo}\n🏁 Entrega: ${destino}`,
+  });
+  const valorB = B.p.valor;
+  await conferirSaldos(subtotal + valorB, kitLoja + kitEntregador);
+  await executar("Fazer pedido", [
+    passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, subtotal + valorB, "Autorizar BRLS"),
+    { rotulo: "Travar o pagamento da loja", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(A.p, { ...o, value: kitLoja }) },
+    { rotulo: "Chamar entregador", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(B.p, { ...o, value: kitEntregador }) },
+  ]);
+  gravarSacola({ loja: null, itens: [] });
+  modal(`<h2>✅ Pedido feito</h2><p>A loja aceita o pedido e um entregador pega a entrega. Quando o entregador aceitar, toque em <b>"Enviar endereço"</b> na tela da entrega: ele recebe (cifrado) o endereço da loja, o código de retirada e o seu endereço.</p>
+    <p><b>🔑 Código de entrega</b> — dê ao entregador <b>só com a comida na mão</b>:</p>${qrSvg(B.codigo)}<div class="codigo">${esc(B.codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  ir("TRABALHOS", { aba: "meus" });
+}
+
+// ---------- Pix ⇄ BRLS ----------
+const PREFIXO_P2P = "brlsp2p:";
+/** Comprador sem BRLS (e sem POL) pede ao vendedor: mensagem assinada pelo avisador. */
+async function pedirCompraPix() {
+  const a = vit().item(S.params.chave);
+  const reais = lerValor($("#pix-reais").value);
+  const min = lerValor(a.pix.min);
+  const max = lerValor(a.pix.max);
+  if (reais < min || reais > max) throw new Error(`O valor precisa ficar entre R$ ${precoBr(a.pix.min)} e R$ ${precoBr(a.pix.max)}`);
+  const pedido = { v: 1, anuncio: a.chave, comprador: S.endereco, reais: E.formatUnits(reais, 18), rede: S.chainId, em: agora() };
+  const msg = JSON.stringify(pedido);
+  const sig = await S.carteira.signMessage(msg);
+  const texto = PREFIXO_P2P + btoa(unescape(encodeURIComponent(JSON.stringify({ msg, sig }))));
+  modal(`<div class="giro"></div><h2>Pedindo…</h2><p class="mudo">Mandando o pedido para o app do vendedor.</p>`);
+  const ok = await CO.postarTopico(CO.topicoDe(S.chainId, a.de, "pix"), texto).catch(() => false);
+  S.pedidoPix = texto;
+  modal(`<h2>${ok ? "📨 Pedido enviado" : "⚠️ O avisador não respondeu"}</h2>
+    <p>${ok ? "O vendedor recebe o aviso no app. Quando ele aceitar, os BRLS ficam travados para você e aparece um trabalho <b>💱 Pix → BRLS</b> em Trabalhos." : "Mande o pedido para o vendedor por outro caminho (WhatsApp, por exemplo): ele abre em Vitrine → Meus anúncios → Ler pedido."}</p>
+    <p class="mudo">Ainda <b>não</b> faça o Pix: espere os BRLS estarem travados para você.</p>
+    <button class="btn sec" data-acao="pix-copiar-pedido">📋 Copiar o pedido</button>
+    <button class="btn prim" data-acao="fechar-modal">Ok</button>`);
+}
+
+/** Vendedor: lê os pedidos de compra que chegaram e mostra para aceitar ou recusar. */
+async function mostrarPedidosPix(box) {
+  if (!box) return;
+  const meus = vit().anuncios({ cat: "pix", de: S.endereco, todos: true });
+  if (!meus.length) return;
+  const textos = await CO.lerTopico(CO.topicoDe(S.chainId, S.endereco, "pix"), "6h", PREFIXO_P2P).catch(() => []);
+  const itens = [];
+  for (const t of [...textos, ...(S.pedidosPixLocais || [])]) {
+    if (CO.jaResolvido(t)) continue;
+    const p = lerPedidoPix(t);
+    if (p) itens.push(p);
+  }
+  S.pedidosPix = new Map(itens.map((p) => [p.k, p]));
+  const html = itens.map((p) => `<div class="cartao correio destaque"><h2 style="margin-top:0">💱 Pedido de compra: R$ ${precoBr(p.pedido.reais)}</h2>
+      <div class="linha"><span>Comprador</span><span>${esc(curto(p.pedido.comprador))}</span></div>
+      <div class="linha"><span>Você trava</span><b>${precoBr(p.brls)} BRLS</b></div>
+      <p class="mudo">Aceitando, os BRLS ficam travados no contrato para ele. Ele faz o Pix na sua chave e avisa. <b>Só libere depois de ver o dinheiro na sua conta.</b></p>
+      ${botaoSegurar("aceitar e travar os BRLS", `pixok:${p.k}`)}<button class="btn sec" data-acao="pix-recusar" data-k="${esc(p.k)}">Recusar</button></div>`).join("");
+  if (box.dataset.html !== html) {
+    box.dataset.html = html;
+    box.innerHTML = html;
+    ligarSegurar(box);
+    if (html) avisarNovoPedido("💱 Pedido de compra de BRLS!");
+  }
+}
+
+function lerPedidoPix(texto) {
+  try {
+    const { msg, sig } = JSON.parse(decodeURIComponent(escape(atob(texto.slice(PREFIXO_P2P.length)))));
+    const pedido = JSON.parse(msg);
+    if (E.verifyMessage(msg, sig).toLowerCase() !== String(pedido.comprador).toLowerCase()) return null;
+    if (Number(pedido.rede) !== Number(S.chainId) || agora() - Number(pedido.em) > 6 * 3600) return null;
+    const a = vit().item(pedido.anuncio);
+    if (!a || a.de.toLowerCase() !== S.endereco.toLowerCase() || a.cat !== "pix" || a.pix.lado !== "vendo") return null;
+    const reais = E.parseUnits(String(pedido.reais), 18);
+    if (reais < E.parseUnits(a.pix.min, 18) || reais > E.parseUnits(a.pix.max, 18)) return null;
+    const brls = (Number(pedido.reais) * (1 - a.pix.premio / 100)).toFixed(2);
+    return { texto, pedido, a, brls, k: E.id(texto).slice(2, 14) };
+  } catch {
+    return null;
+  }
+}
+
+async function aceitarPedidoPix(k) {
+  const p = S.pedidosPix?.get(k);
+  if (!p) throw new Error("Esse pedido não está mais aqui. Atualize a tela.");
+  const valor = lerValor(p.brls);
+  const kit = E.parseEther("0.3");
+  await conferirSaldos(valor, kit);
+  const desc = `💱 Pix → BRLS: pague R$ ${precoBr(p.pedido.reais)} na chave ${p.a.pix.chave}${p.a.pix.banco ? ` (${p.a.pix.banco})` : ""} · ref ${refAnuncio(p.a)}`;
+  const { p: prm } = prepararTrabalho({ modalidade: 2, trabalhador: E.getAddress(p.pedido.comprador), valor, horas: 24, descricao: desc, comCodigo: false });
+  await executar("Aceitar pedido Pix", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar BRLS para o comprador", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(prm, { ...o, value: kit }) }]);
+  CO.resolver(p.texto);
+  render();
+}
+
+/** Quem tem BRLS e quer Pix: trava os BRLS para quem compra BRLS (anúncio "compro"). */
+async function venderBrlsPorPix() {
+  const a = vit().item(S.params.chave);
+  const reais = lerValor($("#pix-reais").value);
+  if (reais < lerValor(a.pix.min) || reais > lerValor(a.pix.max)) throw new Error(`O valor precisa ficar entre R$ ${precoBr(a.pix.min)} e R$ ${precoBr(a.pix.max)}`);
+  const chave = ($("#pix-minha-chave").value || "").trim();
+  if (chave.length < 5) throw new Error("Informe a sua chave Pix");
+  const brls = (Number(E.formatUnits(reais, 18)) * (1 + a.pix.premio / 100)).toFixed(2);
+  const valor = lerValor(brls);
+  await conferirSaldos(valor);
+  const reaisTxt2 = precoBr(E.formatUnits(reais, 18));
+  const { p, codigo } = prepararTrabalho({ modalidade: 2, trabalhador: E.getAddress(a.de), valor, horas: 24, descricao: `💱 BRLS → Pix: me pague R$ ${reaisTxt2} · ref ${refAnuncio(a)}`, comCodigo: true, privado: `💱 Pague R$ ${reaisTxt2} no Pix:\n🔑 Chave: ${chave}` });
+  await executar("Vender BRLS por Pix", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar BRLS", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, o) }]);
+  modal(`<h2>✅ BRLS travados</h2><p>Quando ${esc(curto(a.de))} aceitar, toque em <b>"Enviar endereço"</b> na tela do trabalho: sua chave Pix vai cifrada só para ele.</p>
+    <p>Depois que <b>o dinheiro aparecer na sua conta</b>, toque em "Pagar" (liberar). Não libere por print.</p>
+    <p class="mudo">Código de liberação (só se quiser entregar em mãos): ${esc(codigo)}</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  ir("TRABALHOS", { aba: "meus" });
+}
 
 // ---------- Corrida (trabalho presencial com vaga aberta; ver corrida.js) ----------
 const minhasCorridas = (meus) => meus.filter((t) => lerCorrida(t.descricao) && !t.encerrado);
@@ -1410,6 +2020,11 @@ TELAS.TRABALHO = async () => {
     chegadaPeloCliente: "confirmar que o trabalhador chegou",
   };
   const NOME = cor ? { cliente: "Passageiro", trab: "Motorista", candidato: "Motorista candidato" } : { cliente: "Cliente", trab: "Trabalhador", candidato: "Candidato" };
+  const pixT = /^💱/u.test(resumo?.descricao || "");
+  if (pixT) {
+    Object.assign(NOME, { cliente: "Quem recebe o Pix", trab: "Quem faz o Pix", candidato: "Candidato" });
+    Object.assign(ROTULOS, { aceitar: "aceitar", marcarEntregue: "avisar: já fiz o Pix", liberar: "recebi o Pix na conta: liberar os BRLS", reivindicar: "receber os BRLS (prazo vencido)", desistir: "desistir (devolve os BRLS)" });
+  }
   if (cor) Object.assign(ROTULOS, {
     aceitar: "quero fazer esta corrida", cancelar: "cancelar a corrida e reaver o valor", aprovarCandidato: "aprovar este motorista",
     recusarCandidato: "recusar este motorista", retirarCandidatura: "desistir da corrida", chegadaPeloCliente: "confirmar: entrei no veículo",
@@ -1419,7 +2034,7 @@ TELAS.TRABALHO = async () => {
   tela(`
     ${cor ? `<h1>${cor.icone} Corrida: ${esc(cor.de)} → ${esc(cor.para)}</h1>
     <p class="mudo">#${esc(t.id)} · ${cor.veiculo === "moto" ? "Moto" : "Carro"}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
-    <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>` : `<h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
+    <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>` : `<h1>${iconeDesc(resumo?.descricao, m).map((x, i) => (i ? esc(x) : x)).join(" ")}</h1>
     <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
     ${!ativo ? `<div class="ok">📁 <b>Arquivado.</b> ${t.estado === 5 ? "Cancelado: o valor travado voltou para a carteira de quem contratou." : "Concluído: o pagamento já foi feito."} Os códigos deste trabalho não valem mais.</div>` : ""}
     <div class="cartao">
@@ -1444,7 +2059,7 @@ TELAS.TRABALHO = async () => {
     <div id="correio"></div>
     ${!souCliente && t.trabalhador.toLowerCase() === S.endereco.toLowerCase() && t.estado === 1 ? `<div id="rota"></div>` : ""}
     ${S.imp.Encaminhador && !souCliente ? "" : S.imp.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás da outra pessoa</button>` : ""}
-    ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir.<br><small style="white-space:pre-line">${esc(enderecoGuardado)}</small></div>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}<button class="btn prim" data-acao="enviar-endereco">📍 Enviar endereço (cifrado)</button>` : ""}
+    ${pedirEndereco ? `<div class="aviso">📍 <b>Falta um passo:</b> ${pixT ? "envie sua chave Pix para quem aceitou." : "envie o endereço completo para quem aceitou, senão a pessoa não sabe aonde ir."}<br><small style="white-space:pre-line">${esc(enderecoGuardado)}</small></div>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}<button class="btn prim" data-acao="enviar-endereco">${pixT ? "🔑 Enviar sua chave Pix (cifrada)" : "📍 Enviar endereço (cifrado)"}</button>` : ""}
     ${ativo && souCliente && enderecoGuardado && enderecoEnviado ? `<p class="mudo" style="white-space:pre-line">📍 Endereço enviado pela conversa:
 ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(enderecoGuardado))}` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? `o ${NOME.trab.toLowerCase()}` : souArbitro ? "as partes" : `o ${NOME.cliente.toLowerCase()}`}</button>` : ""}
@@ -1481,7 +2096,18 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
 const fotoTrabalho = (t) => [t.estado, t.trabalhador, t.candidato, t.chegou, t.encerrado, t.pendenteAprovacao].join("|");
 
 /** Rótulos dos pontos de um texto de endereço (corrida: embarque e destino). */
-const rotulosPontos = (texto) => (String(texto || "").includes("Embarque:") ? ["🟢 Embarque", "🏁 Destino"] : ["📍 Local"]);
+const rotulosPontos = (texto) => {
+  const t = String(texto || "");
+  if (t.includes("Embarque:")) return ["🟢 Embarque", "🏁 Destino"];
+  if (t.includes("Retirada:")) return ["🏪 Retirada na loja", "🏁 Entrega no cliente"];
+  return ["📍 Local"];
+};
+/** Ícone e texto de um trabalho: se a descrição já começa com emoji (vitrine, corrida), usa o dela. */
+function iconeDesc(descricao, m) {
+  const d = String(descricao || m.nome);
+  const e = /^(\p{Extended_Pictographic}\uFE0F?)\s*/u.exec(d);
+  return e && !d.startsWith("📍") ? [esc(e[1]), d.slice(e[0].length)] : [m.icone, d];
+}
 
 /** Trabalhador/motorista: os pontos exatos (que chegaram cifrados na conversa) com botões de GPS. */
 async function carregarRota(t) {
@@ -1716,7 +2342,75 @@ document.addEventListener("confirmado", async (ev) => {
 $("#btn-bloquear").addEventListener("click", bloquear);
 
 async function acao(nome, el) {
+  if (nome?.startsWith("vit-cat-")) {
+    S.vitrineFiltro.cat = nome.slice(8);
+    $$(".cats button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.acao === nome)));
+    return desenharVitrine();
+  }
+  if (nome?.startsWith("an-status-")) return mudarStatus(nome.slice(10));
   switch (nome) {
+    case "vit-anunciar-pix":
+      return ir("ANUNCIAR", { cat: "pix" });
+    case "an-editar":
+      return ir("ANUNCIAR", { chave: S.params.chave });
+    case "an-sacola":
+      return adicionarNaSacola();
+    case "an-mapa": {
+      const p = await escolherPonto({ titulo: "📍 Marque o endereço exato", inicial: S.params.ponto });
+      if (p) { S.params.ponto = p; desenharAcaoAnuncio(vit().item(S.params.chave)); }
+      return;
+    }
+    case "na-pix-vendo":
+    case "na-pix-compro":
+      return ir("ANUNCIAR", { ...S.params, cat: "pix", lado: nome.slice(7) });
+    case "na-spec-mais":
+      return $("#na-specs").insertAdjacentHTML("beforeend", linhaSpec());
+    case "na-opcao-mais":
+      return $("#na-opcoes").insertAdjacentHTML("beforeend", linhaOpcao());
+    case "na-bairro-mapa": {
+      const p = await escolherPonto({ titulo: "📍 Onde fica (só o bairro aparece)" });
+      if (p?.bairro) $("#na-bairro").value = p.bairro;
+      return;
+    }
+    case "lj-mapa": {
+      const p = await escolherPonto({ titulo: "📍 Endereço de retirada da loja", inicial: S.lojaPonto });
+      if (!p) return;
+      const vals = Object.fromEntries($$("#tela input, #tela textarea, #tela select").filter((x) => x.id).map((x) => [x.id, x.value]));
+      S.lojaPonto = p;
+      await render();
+      for (const [id, v] of Object.entries(vals)) if ($(`#${id}`) && id !== "lj-foto") $(`#${id}`).value = v;
+      if (p.bairro && !$("#lj-bairro").value) $("#lj-bairro").value = p.bairro;
+      return;
+    }
+    case "sac-mapa": {
+      const p = await escolherPonto({ titulo: "📍 Onde entregar", inicial: S.sacolaPonto });
+      if (p) { S.sacolaPonto = p; render(); }
+      return;
+    }
+    case "sac-tirar": {
+      const s = lerSacola();
+      s.itens.splice(Number(el.dataset.n), 1);
+      gravarSacola(s);
+      return render();
+    }
+    case "sac-limpar":
+      gravarSacola({ loja: null, itens: [] });
+      return ir("VITRINE");
+    case "pix-recusar": {
+      const p = S.pedidosPix?.get(el.dataset.k);
+      if (p) CO.resolver(p.texto);
+      el.closest(".correio")?.remove();
+      return toast("Pedido recusado.");
+    }
+    case "pix-copiar-pedido":
+      await navigator.clipboard.writeText(S.pedidoPix || "");
+      return toast("Pedido copiado: mande para o vendedor.");
+    case "pix-colar-pedido": {
+      const t = (prompt("Cole aqui o pedido que o comprador mandou") || "").trim();
+      if (!t.startsWith(PREFIXO_P2P)) return toast("Isso não é um pedido Pix do BRLS.");
+      (S.pedidosPixLocais ||= []).push(t);
+      return mostrarPedidosPix($("#pix-pedidos"));
+    }
     case "cor-mapa-de":
       return marcarPontoCorrida("de");
     case "cor-mapa-para":
@@ -1900,7 +2594,7 @@ async function acao(nome, el) {
       const txs = {};
       if (t.txCriacao) txs[t.cliente.toLowerCase()] = [t.txCriacao];
       if (t.txAceite) txs[t.trabalhador.toLowerCase()] = [t.txAceite];
-      const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), `📍 Endereço: ${end}`, txs);
+      const prep = await S.chat.preparar(idConversa(S.imp.EscrowTrabalho, t.id), S.carteira, participantes(t), /^\p{Extended_Pictographic}/u.test(end) ? end : `📍 Endereço: ${end}`, txs);
       if ((await executar("Enviar endereço", [passoMensagem("Enviar cifrado", prep)])) === "semgas") return;
       localStorage.setItem(`xbrl.endereco.enviado.${chave}`, "1");
       return;
@@ -2007,6 +2701,9 @@ async function acao(nome, el) {
 // Ações confirmadas por "segurar"
 async function confirmar(nome) {
   if (nome.startsWith("correio-")) return enviarDoCorreio(nome);
+  if (nome.startsWith("pixok:")) return aceitarPedidoPix(nome.slice(6));
+  const vitrineAcoes = { "na-publicar": publicarAnuncio, "lj-publicar": publicarLoja, "an-comprar": () => comprarAnuncio(false), "an-contratar": () => comprarAnuncio(true), "pix-pedir": pedirCompraPix, "pix-vender": venderBrlsPorPix, "sac-pedir": fazerPedidoComida };
+  if (vitrineAcoes[nome]) return vitrineAcoes[nome]();
   switch (nome) {
     case "anotei":
       return ir("CONFIRMAR_FRASE");

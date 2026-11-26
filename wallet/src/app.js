@@ -76,6 +76,9 @@ function ir(destino, params = {}) {
   if (ABERTAS.includes(destino) && !S.carteira) return ir("BLOQUEADA");
   S.tela = destino;
   S.params = params;
+  if (S.querAcesa) telaAcesa(false);
+  const viva = lerViva();
+  setTimeout(() => desenharFaixaViva(S.carteira ? viva : null), 0);
   const aberta = ABERTAS.includes(destino);
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta || !!S.externa;
@@ -457,6 +460,7 @@ function conectarExterna(conexao) {
 
 function bloquear() {
   if (S.externa) return; // quem tranca é a carteira conectada
+  if (ABERTAS.includes(S.tela) && S.tela !== "INICIO") S.voltarPara = { tela: S.tela, params: S.params };
   S.carteira = null;
   S.frasePendente = null;
   S.pinPendente = null;
@@ -470,9 +474,96 @@ setInterval(() => {
   if (S.carteira && !S.externa && Date.now() - S.ultimoUso > SEGURANCA.bloqueioAutomaticoMs) bloquear();
 }, 10_000);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) S.ocultoEm = Date.now();
-  else if (S.carteira && !S.externa && S.ocultoEm && Date.now() - S.ocultoEm > 60_000) bloquear();
+  if (document.hidden) { S.ocultoEm = Date.now(); return; }
+  if (S.carteira && !S.externa && S.ocultoEm && Date.now() - S.ocultoEm > 60_000) return bloquear();
+  // Voltou para o app: atualiza na hora (sem esperar o próximo ciclo), religa a tela acesa e,
+  // se houver corrida em andamento e a pessoa estiver em outra tela, leva direto para ela.
+  if (S.querAcesa) telaAcesa(true);
+  S.vigiaFn?.().catch(() => {});
+  const fora = S.ocultoEm ? Date.now() - S.ocultoEm : 0;
+  if (S.carteira && fora > 10_000) voltarParaCorrida(true).catch(() => {});
 });
+
+// ---------- Corrida em andamento: nunca se perde (app fechado, bateria acabou, bloqueio, outra tela) ----------
+const CHAVE_VIVA = "xbrl.corrida.viva";
+const lerViva = () => { try { const v = JSON.parse(localStorage.getItem(CHAVE_VIVA) || "null"); return v && v.chain === S.chainId ? v : null; } catch { return null; } };
+
+/** A corrida em andamento desta conta (passageiro ou motorista), ou null. Fica lembrada no aparelho. */
+async function corridaViva() {
+  if (!S.escrow || !S.endereco) return null;
+  await S.escrow.sincronizar();
+  const { meus } = await S.escrow.listar(S.endereco);
+  const eu = S.endereco.toLowerCase();
+  for (const r of minhasCorridas(meus).slice(0, 6)) {
+    const t = await S.escrow.detalhe(r.id).catch(() => null);
+    if (!t || t.estado >= 4) continue;
+    const souP = t.cliente.toLowerCase() === eu;
+    const souM = [t.trabalhador, t.candidato].some((a) => a && a.toLowerCase() === eu);
+    if (!souP && !souM) continue;
+    const tela = souP && t.estado === 0 && !t.pendenteAprovacao && t.trabalhador === E.ZeroAddress ? "CORRIDA" : "TRABALHO";
+    const v = { id: String(t.id), tela, texto: passoCorrida(t, souP).texto, chain: S.chainId, souP };
+    try { localStorage.setItem(CHAVE_VIVA, JSON.stringify(v)); } catch { /* ok */ }
+    return v;
+  }
+  try { localStorage.removeItem(CHAVE_VIVA); } catch { /* ok */ }
+  return null;
+}
+const naTelaDaCorrida = (v) => (v.tela === "TRABALHO" ? S.tela === "TRABALHO" && String(S.params?.id) === v.id : S.tela === "CORRIDA");
+
+/** Leva para a corrida em andamento (se houver e a pessoa não estiver nela). */
+async function voltarParaCorrida(avisar) {
+  const v = await corridaViva();
+  desenharFaixaViva(v);
+  if (!v || naTelaDaCorrida(v) || !ABERTAS.includes(S.tela) || $("#modal")?.hidden === false) return false;
+  if (avisar) toast("🚗 Você tem uma corrida em andamento");
+  ir(v.tela, v.tela === "TRABALHO" ? { id: v.id } : {});
+  return true;
+}
+
+/** Depois de desbloquear/conectar: volta para a corrida, ou para onde a pessoa estava. */
+async function aoEntrar() {
+  const volta = S.voltarPara;
+  S.voltarPara = null;
+  if (await voltarParaCorrida(true).catch(() => false)) return;
+  if (volta && S.tela === "INICIO" && ABERTAS.includes(volta.tela)) ir(volta.tela, volta.params);
+}
+
+/** Faixa fixa "Corrida em andamento" em todas as telas, enquanto houver corrida. */
+function desenharFaixaViva(v) {
+  let f = $("#faixa-viva");
+  const mostrar = v && S.carteira && ABERTAS.includes(S.tela) && !naTelaDaCorrida(v);
+  if (!mostrar) { f?.remove(); return; }
+  if (!f) {
+    f = document.createElement("button");
+    f.id = "faixa-viva";
+    f.type = "button";
+    f.addEventListener("click", () => { const x = lerViva(); if (x) ir(x.tela, x.tela === "TRABALHO" ? { id: x.id } : {}); });
+    document.body.appendChild(f);
+  }
+  f.innerHTML = `<b>🚗 Corrida em andamento</b><span>${esc(v.texto)}</span><i>Abrir ›</i>`;
+}
+setInterval(() => {
+  if (S.carteira && !document.hidden) corridaViva().then(desenharFaixaViva).catch(() => {});
+}, 30_000);
+
+/** Mantém a tela do celular acesa durante a corrida e enquanto o motorista está online. */
+async function telaAcesa(liga) {
+  // No APK (Tor) a janela não tem Wake Lock: pede à Caixa Forte para manter a tela acesa
+  if (REDE_PELA_PONTE && S.acesaNativa !== liga) { S.acesaNativa = liga; window.parent.postMessage({ brls: 1, tipo: "tela-acesa", liga }, "*"); }
+  try {
+    if (liga) {
+      S.querAcesa = true;
+      if (!S.wake && navigator.wakeLock && !document.hidden) {
+        S.wake = await navigator.wakeLock.request("screen");
+        S.wake.addEventListener("release", () => (S.wake = null));
+      }
+    } else {
+      S.querAcesa = false;
+      await S.wake?.release();
+      S.wake = null;
+    }
+  } catch { /* aparelho sem suporte: segue normal */ }
+}
 
 // ----------------------------------------------------------------------------
 // Componentes: PIN e deslizar
@@ -633,12 +724,24 @@ TELAS.CONFIRMAR_PIN = () =>
 
 TELAS.BLOQUEADA = async () => {
   const bio = K.temBiometria();
+  // Com corrida em andamento, a tela bloqueada continua mostrando em que passo ela está (dado público)
+  const atualizarBloqueada = async () => {
+    const v = lerViva();
+    if (!v || !S.escrow) return;
+    const t = await S.escrow.detalhe(v.id).catch(() => null);
+    if (!t) return;
+    if (t.estado >= 4) { try { localStorage.removeItem(CHAVE_VIVA); } catch { /* ok */ } }
+    const el = $("#bl-viva");
+    if (el) el.textContent = passoCorrida(t, t.cliente.toLowerCase() === String(K.enderecoSalvo()).toLowerCase()).texto;
+  };
+  setTimeout(() => { atualizarBloqueada().catch(() => {}); vigiar("BLOQUEADA", atualizarBloqueada, 15000); }, 0);
   tela(`
     <div class="abertura">
       ${roseta({ tam: 120, tracos: 5 })}
       <h1>Carteira bloqueada</h1>
       <p class="serie">Nº ${esc(curto(K.enderecoSalvo()))}</p>
     </div>
+    ${lerViva() ? `<div class="ok viva-bloqueada">🚗 <b>Você tem uma corrida em andamento.</b><br><span id="bl-viva">${esc(lerViva().texto)}</span><br><small>Desbloqueie para ver o mapa e o código.</small></div>` : ""}
     <div class="deslizar"><input type="range" id="deslize" min="0" max="100" value="0" aria-label="Deslize para desbloquear"><span>Deslize para desbloquear ➜</span></div>
     ${bio ? `<button class="btn sec" data-acao="biometria">👆 Usar biometria</button>` : ""}
     <button class="btn sec" data-acao="esqueci" style="margin-top:30px">Esqueci o PIN (restaurar com as palavras)</button>`);
@@ -658,6 +761,7 @@ function pedirPin() {
     const frase = await K.abrirComPin(pin);
     abrirSessao(frase);
     ir("INICIO");
+    aoEntrar();
   });
 }
 
@@ -1891,6 +1995,7 @@ async function atualizarCorridasAtivas() {
   }
   // Motorista sem POL querendo a corrida, ou a outra parte pedindo para você enviar por ela
   await mostrarCorreio($("#cor-correio"), det.map((x) => x.t), null);
+  if (det.length) telaAcesa(true);
   // Contrapropostas de motoristas para os seus pedidos abertos
   await mostrarContrapropostas($("#cor-contra"), det.filter(({ t }) => t.cliente.toLowerCase() === eu && t.estado === 0 && !t.pendenteAprovacao).map((x) => x.t));
 }
@@ -1898,6 +2003,7 @@ async function atualizarCorridasAtivas() {
 /** Repete `fn` a cada `ms` enquanto a tela `nome` estiver aberta e o app visível (sem redesenhar a tela toda). */
 function vigiar(nome, fn, ms) {
   clearInterval(S.vigia);
+  S.vigiaFn = async () => { if (S.tela === nome) await fn(); };
   S.vigia = setInterval(() => {
     if (S.tela !== nome) return clearInterval(S.vigia);
     if (document.hidden || $("#modal")?.hidden === false) return;
@@ -1911,7 +2017,7 @@ const lerFiltros = () => { try { return { veiculo: "todos", raio: 10, minKm: 0, 
 
 TELAS.MOTORISTA = async () => {
   if (!S.escrow) return tela(`<h1>Motorista</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
-  S.motorista ||= { online: false, vistos: null, aqui: null };
+  S.motorista ||= { online: (() => { try { return localStorage.getItem("xbrl.motorista.online") === "1"; } catch { return false; } })(), vistos: null, aqui: null };
   const m = S.motorista;
   await vit()?.sincronizar().catch(() => {});
   const perfil = vit()?.motorista(S.endereco);
@@ -1936,6 +2042,7 @@ TELAS.MOTORISTA = async () => {
     <p class="mudo">⛽ Sem POL? Pode aceitar assim mesmo: o pedido vai direto para o app do passageiro, ele aceita você e paga a taxa. O gás da corrida chega para você na hora.</p>
     <button class="btn sec" data-ir="GANHOS">📊 Meus ganhos</button>`);
   if (m.online) {
+    telaAcesa(true);
     atualizarPedidos();
     vigiar("MOTORISTA", atualizarPedidos, 10000);
   } else atualizarPedidos(true);
@@ -2021,7 +2128,7 @@ async function pedirCorrida() {
   const horas = VALIDADES_HORAS.includes(Number(r.validade)) ? Number(r.validade) : 2;
   const favorito = r.favorito && E.isAddress(r.favorito) ? E.getAddress(r.favorito) : E.ZeroAddress;
   const descricao = descricaoCorrida({ categorias: r.categorias, de, para, pessoas: r.pessoas, obs: ler("cor-obs"), aprox: { lat: r.dePonto.lat, lon: r.dePonto.lon }, km: r.rota.km, min: r.rota.min, expresso: r.expresso, agendada });
-  const { p, codigo } = novaCorrida({ trabalhador: favorito, valor, prazo: (agendada || agora()) + horas * 3600, descricao, privado: enderecoCorrida(r.dePonto, r.paraPonto) });
+  const { p, codigo } = novaCorrida({ trabalhador: favorito, valor, prazo: (agendada || agora()) + horas * 3600 + Math.max(3600, Math.round(r.rota.min * 3 * 60)), descricao, privado: enderecoCorrida(r.dePonto, r.paraPonto) });
   await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
   S.corrida = { categorias: r.categorias, pessoas: 1, validade: r.validade };
   modal(`<h2>✅ Corrida pedida</h2>
@@ -2099,7 +2206,7 @@ async function aceitarContraproposta(k) {
   if (antigo.estado !== 0 || antigo.pendenteAprovacao) throw new Error("O pedido já mudou (alguém aceitou). Atualize a tela.");
   const resumo = S.escrow.resumoTrabalhos().get(String(x.t.id));
   const privado = (() => { try { return localStorage.getItem(`xbrl.endereco.${antigo.chegadaHash}`) || ""; } catch { return ""; } })();
-  const { p, codigo } = novaCorrida({ trabalhador: x.motorista, valor: x.valor, prazo: agora() + 2 * 3600, descricao: resumo.descricao, privado });
+  const { p, codigo } = novaCorrida({ trabalhador: x.motorista, valor: x.valor, prazo: Math.max(Number(antigo.prazo), agora() + 3 * 3600), descricao: resumo.descricao, privado });
   const kit = antigo.kitGas || 0n;
   await executar("Aceitar contraproposta", [
     passoEscrow("Cancelar o pedido antigo", "cancelar", [BigInt(x.t.id)]),
@@ -2109,6 +2216,107 @@ async function aceitarContraproposta(k) {
   CO.resolver(x.texto);
   modal(`<h2>✅ Combinado</h2><p>O motorista recebe o pedido e aceita. Depois, envie o endereço exato na tela da corrida.</p><p><b>🔑 Novo código do destino</b>:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
   ir("CORRIDA");
+}
+
+// ---------- Cancelar depois do aceite, sem depender de resposta ----------
+// O passageiro ASSINA (de graça) a proposta "X% ao motorista" e manda pelo avisador. O motorista:
+//   - aceita: o app dele abre o cancelamento, envia a proposta assinada do passageiro e propõe o mesmo X%
+//     (propostas iguais → o contrato divide na hora; com 0%, ele só desiste e tudo volta);
+//   - recusa ou some: nada trava. Quando o prazo do contrato vence, o passageiro pega 100% de volta
+//     sozinho (reembolsarPorPrazo). O motorista se protege marcando a corrida como feita ao chegar.
+const PREFIXO_CANCEL = "brlscancel:";
+const PREFIXO_CANCEL_NAO = "brlscancelnao:";
+const chaveCancel = (id) => `xbrl.cancel.${S.chainId}.${id}`;
+
+async function pedirCancelamento(t, bps) {
+  const passo = passoEscrow(`Propor ${bps / 100}% ao motorista`, "proporAcordo", [BigInt(t.id), bps]);
+  const texto = await SG.assinar(S.carteira, S.provider, S.imp.Encaminhador, [passo.chamada]);
+  const ok = await CO.postarTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), PREFIXO_CANCEL + JSON.stringify({ bps, texto }));
+  try { localStorage.setItem(chaveCancel(t.id), JSON.stringify({ bps, em: agora() })); } catch { /* ok */ }
+  modal(`<h2>${ok ? "📨 Pedido de cancelamento enviado" : "⚠️ O avisador não respondeu"}</h2>
+    <p>${ok ? `O motorista vê no app e aceita ou recusa. Aceitando, ele recebe ${bps / 100}% e o resto volta para você na hora.` : "Tente de novo em instantes."}</p>
+    <p><b>Se ele não responder</b>, nada trava: a partir de <b>${esc(horaCurta(Number(t.prazo)))}</b> você pega <b>100%</b> de volta com um toque, nesta tela.</p>
+    <button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  render();
+}
+
+async function lerPedidoCancelamento(t) {
+  const textos = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "3h", PREFIXO_CANCEL).catch(() => []);
+  for (const x of textos.reverse()) {
+    try {
+      if (CO.jaResolvido(x)) continue;
+      const { bps, texto } = JSON.parse(x.slice(PREFIXO_CANCEL.length));
+      const d = SG.decodificar(texto);
+      if (d.pedidos.length !== 1 || d.pedidos[0].from.toLowerCase() !== t.cliente.toLowerCase()) continue;
+      const f = new E.Interface(ABIS.EscrowTrabalho).parseTransaction({ data: d.pedidos[0].data });
+      if (f.name !== "proporAcordo" || String(f.args[0]) !== String(t.id) || Number(f.args[1]) !== Number(bps)) continue;
+      await SG.conferir(S.provider, S.imp, d);
+      return { x, bps: Number(bps), d };
+    } catch { /* inválido ou vencido */ }
+  }
+  return null;
+}
+
+async function aceitarCancelamento(t) {
+  const p = await lerPedidoCancelamento(t);
+  if (!p) throw new Error("O pedido de cancelamento venceu ou já foi usado.");
+  if (p.bps === 0) await executar("Aceitar o cancelamento", [passoEscrow("Desistir (tudo volta ao passageiro)", "desistir", [BigInt(t.id)])]);
+  else {
+    await executar("Aceitar o cancelamento", [
+      passoEscrow("Abrir o cancelamento", "abrirDisputa", [BigInt(t.id)]),
+      ...SG.passosParaEnviar(S.carteira, S.imp, p.d),
+      passoEscrow(`Aceitar ${p.bps / 100}%`, "proporAcordo", [BigInt(t.id), p.bps]),
+    ]);
+  }
+  CO.resolver(p.x);
+}
+
+async function recusarCancelamento(t) {
+  const p = await lerPedidoCancelamento(t);
+  if (p) CO.resolver(p.x);
+  const msg = JSON.stringify({ id: String(t.id), em: agora() });
+  const sig = await S.carteira.signMessage(msg);
+  await CO.postarTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), PREFIXO_CANCEL_NAO + JSON.stringify({ msg, sig })).catch(() => {});
+  toast("Você recusou. A corrida continua.");
+  render();
+}
+
+/** Passageiro: o motorista recusou o cancelamento? */
+async function motoristaRecusou(t) {
+  const textos = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "3h", PREFIXO_CANCEL_NAO).catch(() => []);
+  return textos.some((x) => {
+    try { const { msg, sig } = JSON.parse(x.slice(PREFIXO_CANCEL_NAO.length)); return JSON.parse(msg).id === String(t.id) && E.verifyMessage(msg, sig).toLowerCase() === t.trabalhador.toLowerCase(); } catch { return false; }
+  });
+}
+
+/** Mostra, na tela da corrida, o estado do cancelamento (para os dois lados). */
+async function mostrarCancelamento(t, souCliente) {
+  const box = $("#cor-cancel");
+  if (!box || t.estado !== 1) return;
+  let html = "";
+  if (souCliente) {
+    let pend = null;
+    try { pend = JSON.parse(localStorage.getItem(chaveCancel(t.id)) || "null"); } catch { /* ok */ }
+    if (pend) {
+      const recusou = await motoristaRecusou(t);
+      const relogio = Number((await S.provider.getBlock("latest"))?.timestamp || agora()); // relógio da blockchain
+      const venceu = relogio > Number(t.prazo);
+      html = `<div class="cartao correio ${venceu ? "destaque" : ""}"><h2 style="margin-top:0">${recusou ? "O motorista recusou o cancelamento" : `Cancelamento pedido (${pend.bps / 100}% ao motorista)`}</h2>
+        <p>${venceu ? "O prazo do contrato venceu: pegue os 100% de volta agora." : recusou ? "Ele quer fazer a corrida. Se mesmo assim ele não vier," : "Aguardando o motorista responder. Se ele não responder,"}${venceu ? "" : ` a partir de <b>${esc(horaCurta(Number(t.prazo)))}</b> você pega <b>100%</b> de volta aqui.`}</p>
+        ${venceu ? botaoSegurar("pegar meu dinheiro de volta", "tr-reembolsarPorPrazo") : ""}</div>`;
+    }
+  } else {
+    const p = await lerPedidoCancelamento(t);
+    if (p) {
+      html = `<div class="cartao correio destaque"><h2 style="margin-top:0">O passageiro quer cancelar</h2>
+        <p>Ele propõe <b>${p.bps / 100}%</b> do valor para você (R$ ${fmt((t.valor * BigInt(p.bps)) / 10000n)})${p.bps ? "" : ": tudo volta para ele"}. Aceitando, o contrato divide na hora.</p>
+        ${botaoSegurar("aceitar o cancelamento", "cor-cancel-aceitar")}<button class="btn sec" data-acao="cor-cancel-recusar">Recusar e continuar a corrida</button></div>`;
+    }
+    if (t.chegou && Number(t.prazo) - agora() < 45 * 60) {
+      html += `<div class="aviso">⏰ O prazo do contrato vence às <b>${esc(horaCurta(Number(t.prazo)))}</b>. Ao chegar, receba o código; se o passageiro não mostrar, toque em "marcar a corrida como feita" antes disso.</div>`;
+    }
+  }
+  if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; ligarSegurar(box); if (html && !souCliente && html.includes("quer cancelar")) avisarNovoPedido("O passageiro pediu para cancelar"); }
 }
 
 // ---------- Na corrida: posição do motorista (cifrada só para o passageiro) ----------
@@ -2291,6 +2499,7 @@ TELAS.TRABALHO = async () => {
   const m = ESCROW.modalidades[t.modalidade];
   const cor = t.modalidade === 0 ? lerCorrida(resumo?.descricao) : null; // corrida de carro/moto
   if (cor) await vit()?.sincronizar().catch(() => {}); // perfil do motorista (carro, cor, placa)
+  if (cor && t.estado < 4) telaAcesa(true);
   // Na corrida o passageiro confirma o embarque com um toque (o código de chegada fica guardado)
   const acoes = S.escrow.acoesPossiveis(t, S.endereco).filter((a) => !(cor && a === "confirmarChegada"));
   const [rc, rt] = await Promise.all([S.escrow.reputacao(t.cliente), t.trabalhador !== E.ZeroAddress ? S.escrow.reputacao(t.trabalhador) : null]);
@@ -2395,6 +2604,8 @@ ${esc(enderecoGuardado)}</p>${botoesGps(enderecoGuardado, rotulosPontos(endereco
     const digitando = document.activeElement?.matches?.("input,textarea,select");
     if (fotoTrabalho(agora) !== foto && !digitando) return render();
     await mostrarCorreio($("#correio"), [agora], cor);
+    if (cor) corridaViva().catch(() => {}); // mantém lembrada (para voltar depois de fechar o app)
+    if (cor && agora.estado === 1) await mostrarCancelamento(agora, souCliente);
     if (cor && agora.estado === 1) {
       if (agora.trabalhador.toLowerCase() === S.endereco.toLowerCase()) await enviarMinhaPosicao(agora);
       else if (souCliente) await mostrarMotoristaNoMapa(agora, coordenadasNoTexto(enderecoGuardado || "")[0]);
@@ -2419,6 +2630,7 @@ function blocoCorrida(t, souCliente) {
   if (t.estado === 1) {
     if (souCliente) p.push(`<div id="cor-mapa"></div><p class="mudo" id="cor-eta">${t.chegou ? "" : "A posição do motorista aparece aqui quando ele estiver a caminho (cifrada, só você vê)."}</p>`);
     p.push(`<div class="grade duas"><button class="btn sec" data-acao="cor-compartilhar">📤 Compartilhar corrida</button><a class="btn perigo" href="tel:190">🚨 Emergência 190</a></div>`);
+    p.push(`<div id="cor-cancel"></div>`);
     if (souCliente) p.push(`<button class="btn sec" data-acao="cor-cancelar">Cancelar a corrida</button>`);
   }
   if (t.estado === 3 && !souCliente && t.propostaCliente) {
@@ -2793,6 +3005,7 @@ async function acao(nome, el) {
     }
     case "mot-online":
       S.motorista.online = !S.motorista.online;
+      try { localStorage.setItem("xbrl.motorista.online", S.motorista.online ? "1" : "0"); } catch { /* ok */ }
       S.motorista.vistos = null;
       if (S.motorista.online) S.motorista.aqui = await minhaPosicao();
       return render();
@@ -2817,6 +3030,8 @@ async function acao(nome, el) {
       el.closest(".correio")?.remove();
       return toast("Contraproposta recusada");
     }
+    case "cor-cancel-recusar":
+      return recusarCancelamento(S.params.t);
     case "tr-contra-enviar":
       return enviarContraproposta();
     case "cor-compartilhar":
@@ -2831,9 +3046,10 @@ async function acao(nome, el) {
       return render();
     }
     case "cor-cancelar":
-      modal(`<h2>Cancelar a corrida</h2><p>O motorista já aceitou. Para cancelar, proponha quanto ele recebe pelo tempo e pelo caminho que já fez (o resto volta para você). Se ele concordar, o contrato divide na hora.</p>
+      modal(`<h2>Cancelar a corrida</h2><p>O motorista já aceitou. Proponha quanto ele recebe pelo tempo e pelo caminho que já fez (o resto volta para você). Se ele concordar, o contrato divide na hora. <b>Se ele não responder</b>, quando o prazo vencer (${esc(horaCurta(Number(S.params.t.prazo)))}) você pega 100% de volta sozinho.</p>
         <label for="cc-pct">Para o motorista: <b id="cc-pct-v">${S.params.t.chegou ? 50 : 20}%</b></label><input type="range" id="cc-pct" min="0" max="100" step="5" value="${S.params.t.chegou ? 50 : 20}">
         <p class="mudo">Sugestão: 20% se ele ainda está a caminho; mais se já chegou e esperou.</p>
+        <p class="mudo">Pedir não custa nada (você só assina).</p>
         ${botaoSegurar("pedir o cancelamento", "cor-cancelar-ok")}<button class="btn sec" data-acao="fechar-modal">Voltar</button>`);
       $("#cc-pct")?.addEventListener("input", (ev) => ($("#cc-pct-v").textContent = ev.target.value + "%"));
       return;
@@ -2887,7 +3103,8 @@ async function acao(nome, el) {
     case "biometria": {
       const frase = await K.abrirComBiometria();
       abrirSessao(frase);
-      return ir("INICIO");
+      ir("INICIO");
+      return aoEntrar();
     }
     case "atualizar":
       return render();
@@ -3154,11 +3371,10 @@ async function confirmar(nome) {
       return criarTrabalho();
     case "mc-publicar":
       return publicarCarro();
-    case "cor-cancelar-ok": {
-      const t = S.params.t;
-      const bps = Number($("#cc-pct").value) * 100;
-      return executar("Cancelar a corrida", [passoEscrow("Abrir o cancelamento", "abrirDisputa", [BigInt(t.id)]), passoEscrow(`Propor ${bps / 100}% ao motorista`, "proporAcordo", [BigInt(t.id), bps])]);
-    }
+    case "cor-cancelar-ok":
+      return pedirCancelamento(S.params.t, Number($("#cc-pct").value) * 100);
+    case "cor-cancel-aceitar":
+      return aceitarCancelamento(S.params.t);
     case "cor-acordo-aceitar": {
       const t = S.params.t;
       const bps = Math.max(0, Number(t.propostaCliente) - 1);
@@ -3387,7 +3603,8 @@ async function iniciar() {
   if (ponte) {
     if (ponte.chainId && ponte.chainId !== S.chainId && REDES[ponte.chainId]) await conectarRede(ponte.chainId);
     conectarExterna(ponte);
-    return ir("INICIO");
+    ir("INICIO");
+    return aoEntrar();
   }
   ir(K.existeCofre() ? "BLOQUEADA" : "BOAS_VINDAS");
 }

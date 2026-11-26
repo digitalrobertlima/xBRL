@@ -323,3 +323,11 @@ label.check input { width: 22px; height: 22px; margin: 2px 0 0; flex: none; }
 .tarifas .tf-linha input { margin: 4px 0; padding: 8px; text-align: center; }
 .tarifas .tf-cab b { font-size: 13px; text-align: center; color: var(--mudo); }
 .cartao.motorista .fotos.mini img { height: 72px; border-radius: 50%; width: 72px; object-fit: cover; }
+
+/* ---------- Corrida em andamento (faixa fixa e tela bloqueada) ---------- */
+#faixa-viva { position: fixed; left: 8px; right: 8px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 40; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; text-align: left; padding: 10px 14px; border-radius: var(--raio); border: 2px solid var(--ipe); background: var(--mata-funda); color: var(--papel); font: inherit; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); cursor: pointer; }
+#faixa-viva span { grid-column: 1; font-size: 13px; color: var(--mudo); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#faixa-viva i { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-style: normal; color: var(--ipe-claro); font-weight: 700; }
+#faixa-viva:focus-visible { outline: 3px solid var(--ipe-claro); outline-offset: 2px; }
+.viva-bloqueada { margin: 14px 0; }
+body:has(#faixa-viva) #tela { padding-bottom: 84px; }

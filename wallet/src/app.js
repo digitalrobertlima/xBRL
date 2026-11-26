@@ -546,6 +546,100 @@ setInterval(() => {
   if (S.carteira && !document.hidden) corridaViva().then(desenharFaixaViva).catch(() => {});
 }, 30_000);
 
+// ---------- Avisos de verdade (com o app em segundo plano) e plantão ----------
+// "Plantão" = há algo que precisa de aviso: corrida em andamento, motorista online, loja/caixa recebendo
+// pedidos. No APK, a Caixa Forte liga um aviso fixo que mantém o app vivo; no navegador, a aba aberta basta.
+// A vigia de fundo só usa dados PÚBLICOS (blockchain + avisador): funciona até com a carteira bloqueada.
+const dentroDaCaixaForte = () => window.parent !== window;
+const lojaOnline = () => { try { return localStorage.getItem("xbrl.loja.online") === "1"; } catch { return false; } };
+const emPlantao = () => !!(S.motorista?.online || lerViva() || lojaOnline());
+
+function textoPlantao() {
+  const v = lerViva();
+  if (v) return `🚗 ${v.texto}`;
+  if (S.motorista?.online) return "🟢 Online como motorista: avisando pedidos de corrida";
+  return "🛍️ Recebendo pedidos da sua loja / Pix";
+}
+
+function notificar(titulo, corpo = "", tag = "brls") {
+  if (!document.hidden) return; // com o app na tela, o toast + som bastam
+  if (dentroDaCaixaForte()) return window.parent.postMessage({ brls: 1, tipo: "notificar", titulo, corpo }, "*");
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const op = { body: corpo, tag, icon: "./icons/icon-192.png", badge: "./icons/icon-192.png", renotify: true };
+    if (navigator.serviceWorker?.controller) navigator.serviceWorker.ready.then((r) => r.showNotification(titulo, op)).catch(() => {});
+    else new Notification(titulo, op);
+  } catch { /* sem avisos neste aparelho */ }
+}
+
+async function pedirAvisos() {
+  try {
+    if (dentroDaCaixaForte()) return true; // a Caixa Forte pede a permissão dela
+    if (!("Notification" in window)) return false;
+    if (Notification.permission === "default") await Notification.requestPermission();
+    return Notification.permission === "granted";
+  } catch { return false; }
+}
+
+function atualizarPlantao() {
+  const liga = emPlantao();
+  const texto = liga ? textoPlantao() : "";
+  if (S.plantaoEnviado === `${liga}|${texto}`) return;
+  S.plantaoEnviado = `${liga}|${texto}`;
+  if (dentroDaCaixaForte()) window.parent.postMessage({ brls: 1, tipo: "plantao", liga, texto }, "*");
+}
+
+/** Vigia de fundo: com o app escondido e em plantão, confere o que mudou e notifica. */
+async function vigiaFundo() {
+  atualizarPlantao();
+  if (!document.hidden || !emPlantao() || !S.escrow) return;
+  const eu = String(S.endereco || K.enderecoSalvo() || "").toLowerCase();
+  if (!eu) return;
+  await S.escrow.sincronizar();
+  const V = (S.fundo ||= { pronto: false, ids: new Set(), passos: new Map(), textos: new Set() });
+  const avisos = [];
+  const novo = (chave) => { if (V.ids.has(chave)) return false; V.ids.add(chave); return V.pronto; };
+  const agoraS = agora();
+  for (const t of S.escrow.resumoTrabalhos().values()) {
+    if (t.encerrado) continue;
+    const cor = lerCorrida(t.descricao);
+    if (S.motorista?.online && cor && t.trabalhador === E.ZeroAddress && !t.candidato && Number(t.prazo) > agoraS && novo(`v${t.id}`)) {
+      avisos.push([`🚗 Corrida: ${cor.de} → ${cor.para}`, `R$ ${fmt(t.valor)} · ${cor.nomeCategorias}${cor.km != null ? ` · ${brNum(cor.km, 1)} km` : ""}`]);
+    }
+    if (t.trabalhador?.toLowerCase() === eu && t.cliente.toLowerCase() !== eu && novo(`d${t.id}`)) {
+      avisos.push([cor ? "🚗 Corrida para você" : "🛍️ Novo pedido para você", String(t.descricao).slice(0, 120)]);
+    }
+  }
+  const v = lerViva();
+  if (v) {
+    const t = await S.escrow.detalhe(v.id).catch(() => null);
+    if (t) {
+      const texto = passoCorrida(t, t.cliente.toLowerCase() === eu).texto;
+      if (V.passos.has(v.id) && V.passos.get(v.id) !== texto) avisos.push(["🚗 Sua corrida", texto]);
+      V.passos.set(v.id, texto);
+      if (t.estado >= 4) corridaViva().catch(() => {});
+      const textos = await CO.ler(S.chainId, S.imp.EscrowTrabalho, t.id).catch(() => []);
+      const extras = await CO.lerTopico(CO.topico(S.chainId, S.imp.EscrowTrabalho, t.id), "1h", "brls").catch(() => []);
+      for (const x of [...textos, ...extras]) {
+        if (x.startsWith(PREFIXO_LOC) || !novo(`x${E.id(x)}`)) continue;
+        if (x.startsWith(PREFIXO_CANCEL_NAO)) avisos.push(["🚗 Corrida", "O motorista recusou o cancelamento"]);
+        else if (x.startsWith(PREFIXO_CANCEL)) avisos.push(["🚗 Corrida", "O passageiro pediu para cancelar"]);
+        else if (x.startsWith(PREFIXO_CONTRA)) avisos.push(["💬 Contraproposta", "Um motorista propôs outro preço"]);
+        else if (x.startsWith(SG.PREFIXO)) avisos.push(["📨 Pedido esperando você", "A outra parte está sem POL e pediu para você enviar"]);
+      }
+    }
+  }
+  if (lojaOnline()) {
+    const pix = await CO.lerTopico(CO.topicoDe(S.chainId, eu, "pix"), "1h", PREFIXO_P2P).catch(() => []);
+    for (const x of pix) if (novo(`p${E.id(x)}`)) avisos.push(["💱 Pedido de compra de BRLS", "Alguém quer comprar BRLS com Pix"]);
+  }
+  V.pronto = true;
+  for (const [a, b] of avisos.slice(0, 4)) notificar(a, b, a);
+  if (avisos.length) try { navigator.vibrate?.([200, 100, 200]); } catch { /* ok */ }
+}
+setInterval(() => vigiaFundo().catch(() => {}), 20_000);
+document.addEventListener("visibilitychange", () => { if (document.hidden) vigiaFundo().catch(() => {}); });
+
 /** Mantém a tela do celular acesa durante a corrida e enquanto o motorista está online. */
 async function telaAcesa(liga) {
   // No APK (Tor) a janela não tem Wake Lock: pede à Caixa Forte para manter a tela acesa
@@ -1603,6 +1697,7 @@ TELAS.MEUS_ANUNCIOS = async () => {
     ${pedidos.length ? `<h2>Pedidos para você</h2>${pedidos.map((t) => `<button class="item" data-trabalho="${esc(t.id)}"><span class="ic">${esc([...t.descricao][0])}</span><span class="meio"><b>${esc(t.descricao.slice(2))}</b><span class="mudo">#${esc(t.id)} · toque para ver</span></span><b>${fmt(t.valor)}</b></button>`).join("")}` : ""}
     ${meus.some((a) => a.cat === "pix") ? `<button class="btn sec" data-acao="pix-colar-pedido">📋 Colar um pedido Pix recebido por mensagem</button>` : ""}
     <div id="vit-correio"></div>
+    <button class="btn ${lojaOnline() ? "perigo" : "prim"}" data-acao="loja-online">${lojaOnline() ? "🔕 Parar de receber pedidos em segundo plano" : "🔔 Receber pedidos com aviso (também com o app em segundo plano)"}</button>
     <h2>🏪 Sua loja ${loja ? `<small class="mudo">${esc(STATUS[loja.status])}</small>` : ""}</h2>
     <p class="mudo">Para vender comida com cardápio, crie o perfil da loja. Seus pratos (categoria Comida) aparecem nela.</p>
     <button class="btn sec" data-ir="LOJA_EDITAR">${loja ? "✏️ Editar a loja" : "🏪 Criar minha loja"}</button>
@@ -2131,6 +2226,8 @@ async function pedirCorrida() {
   const { p, codigo } = novaCorrida({ trabalhador: favorito, valor, prazo: (agendada || agora()) + horas * 3600 + Math.max(3600, Math.round(r.rota.min * 3 * 60)), descricao, privado: enderecoCorrida(r.dePonto, r.paraPonto) });
   await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
   S.corrida = { categorias: r.categorias, pessoas: 1, validade: r.validade };
+  pedirAvisos();
+  corridaViva().then(() => atualizarPlantao()).catch(() => {});
   modal(`<h2>✅ Corrida pedida</h2>
     <p>O pagamento está travado. ${favorito !== E.ZeroAddress ? "Seu motorista favorito recebe o pedido." : "Deixe o app aberto: quando um motorista quiser, você vê o carro, a placa e a reputação e aprova."}</p>
     <p><b>🔑 Código do destino</b> — mostre ao motorista <b>só quando chegar</b>. Com ele, o motorista recebe:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>
@@ -2958,6 +3055,14 @@ async function acao(nome, el) {
       el.closest(".correio")?.remove();
       return toast("Pedido recusado.");
     }
+    case "loja-online": {
+      const liga = !lojaOnline();
+      try { localStorage.setItem("xbrl.loja.online", liga ? "1" : "0"); } catch { /* ok */ }
+      if (liga) await pedirAvisos();
+      atualizarPlantao();
+      toast(liga ? "🔔 Você vai receber aviso de pedido novo" : "Avisos de pedido desligados");
+      return render();
+    }
     case "pix-copiar-pedido":
       await navigator.clipboard.writeText(S.pedidoPix || "");
       return toast("Pedido copiado: mande para o vendedor.");
@@ -3007,7 +3112,8 @@ async function acao(nome, el) {
       S.motorista.online = !S.motorista.online;
       try { localStorage.setItem("xbrl.motorista.online", S.motorista.online ? "1" : "0"); } catch { /* ok */ }
       S.motorista.vistos = null;
-      if (S.motorista.online) S.motorista.aqui = await minhaPosicao();
+      if (S.motorista.online) { S.motorista.aqui = await minhaPosicao(); await pedirAvisos(); }
+      atualizarPlantao();
       return render();
     case "mot-filtros": {
       const f = { veiculo: $("#mf-veiculo").value, raio: Number($("#mf-raio").value), minKm: Number(String($("#mf-minkm").value).replace(",", ".")) || 0 };

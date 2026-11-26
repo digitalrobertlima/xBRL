@@ -32,8 +32,9 @@ const ABI_ERC20 = [
   "function balanceOf(address) view returns (uint256)",
 ];
 
+/** Abastecimento automático: LIGADO de fábrica (decisão do dono, 26/11/2026). Só desliga se a pessoa desligar. */
 export function autoAtivo() {
-  return localStorage.getItem(AUTO) === "1";
+  try { return localStorage.getItem(AUTO) !== "0"; } catch { return true; }
 }
 
 export function definirAuto(ativo) {

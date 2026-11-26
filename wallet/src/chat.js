@@ -109,6 +109,18 @@ export class Chat {
     return E().computeAddress(p).toLowerCase() === conta ? "0x" + p.slice(4) : null;
   }
 
+  /** Mensagens novas PARA `eu` (de outra pessoa) depois de um bloco. Só lê os eventos públicos: não decifra nada, então funciona até com a carteira bloqueada. */
+  async novas(conversa, eu, depoisDoBloco = 0) {
+    const atual = await this.provider.getBlockNumber();
+    const de = Math.max(this.blocoInicial, Number(depoisDoBloco) + 1);
+    if (de > atual) return [];
+    const logs = await this.contrato.queryFilter(this.contrato.filters.Mensagem(conversa), de, atual);
+    const meu = eu.toLowerCase();
+    return logs
+      .filter((l) => l.args.de.toLowerCase() !== meu && l.args.para.some((p) => p.toLowerCase() === meu))
+      .map((l) => ({ de: l.args.de, bloco: l.blockNumber }));
+  }
+
   /** Lê e decifra as mensagens da conversa que são para `carteira`. */
   async ler(conversa, carteira) {
     const eu = carteira.address.toLowerCase();

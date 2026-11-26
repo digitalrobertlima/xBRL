@@ -17,6 +17,7 @@ import { marca, roseta } from "./marca.js";
 import { ProvedorRotativo } from "./rpc.js";
 import { AssinanteExterno, conectarInjetada, procurarPonte, temInjetada } from "./externa.js";
 import qrcode from "./vendor/qrcode.mjs";
+import { VEICULOS, VALIDADES_HORAS, descricaoCorrida, lerCorrida, enderecoCorrida, passoCorrida } from "./corrida.js";
 
 const E = globalThis.ethers;
 const $ = (s, r = document) => r.querySelector(s);
@@ -47,7 +48,7 @@ const S = {
 // ----------------------------------------------------------------------------
 // Máquina de estados
 // ----------------------------------------------------------------------------
-const ABERTAS = ["INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
+const ABERTAS = ["CORRIDA", "MOTORISTA", "INICIO", "ENVIAR", "RECEBER", "RESERVA", "COFRE", "EXTRATO", "TRABALHOS", "TRABALHO_NOVO", "TRABALHO", "CHAT", "TANQUE", "AJUSTES", "BACKUP"];
 const TRANSICOES = {
   CARREGANDO: ["BOAS_VINDAS", "BLOQUEADA", "INICIO"],
   BOAS_VINDAS: ["CRIAR_FRASE", "RESTAURAR", "VAGAS_PUBLICAS", "INICIO"],
@@ -75,7 +76,7 @@ function ir(destino, params = {}) {
   $("#abas").hidden = !aberta;
   $("#btn-bloquear").hidden = !aberta || !!S.externa;
   for (const b of $$("#abas button")) b.toggleAttribute("aria-current", false);
-  const aba = { TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
+  const aba = { CORRIDA: "TRABALHOS", MOTORISTA: "TRABALHOS", TRABALHO_NOVO: "TRABALHOS", TRABALHO: "TRABALHOS", CHAT: "TRABALHOS", COFRE: "RESERVA", EXTRATO: "INICIO", ENVIAR: "INICIO", RECEBER: "INICIO", TANQUE: "INICIO", BACKUP: "AJUSTES" }[destino] || destino;
   $(`#abas button[data-ir="${aba}"]`)?.setAttribute("aria-current", "page");
   if (aberta) history.replaceState({ tela: destino }, "", location.pathname + location.search);
   window.scrollTo(0, 0);
@@ -504,10 +505,10 @@ TELAS.BOAS_VINDAS = () => tela(`
     <p>Cada BRLS vale R$ 1. Você guarda, paga, contrata e recebe por trabalho, sem banco no meio e sem ninguém poder congelar.</p>
   </div>
   <button class="btn prim" data-acao="criar">Criar minha carteira</button>
-  <button class="btn sec" data-acao="restaurar">Já tenho as 12 palavras</button>
+  <button class="btn sec" data-acao="restaurar">Já tenho minhas palavras (12 ou 24)</button>
   <button class="btn sec" data-ir="VAGAS_PUBLICAS">👀 Ver vagas de trabalho abertas</button>
   ${temInjetada() ? `<button class="btn sec" data-acao="conectar-injetada">🔌 Usar a carteira deste navegador (MetaMask, Rabby)</button>` : ""}
-  <div class="aviso">Sem cadastro, sem servidor. Se você perder as 12 palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
+  <div class="aviso">Sem cadastro, sem servidor. Se você perder as suas palavras, ninguém (nem nós) consegue recuperar seu dinheiro.</div>`);
 
 TELAS.VAGAS_PUBLICAS = async () => {
   if (!S.escrow) return tela(`<h1>Vagas abertas</h1><div class="aviso">Ainda não há trabalhos nesta rede.</div><button class="btn sec" data-ir="BOAS_VINDAS">Voltar</button>`);
@@ -529,11 +530,22 @@ TELAS.VAGAS_PUBLICAS = async () => {
 };
 
 TELAS.CRIAR_FRASE = () => {
-  S.frasePendente ||= K.gerarFrase();
+  S.opcoesFrase ||= { n: 12, idioma: "en" };
+  S.frasePendente ||= K.gerarFrase(S.opcoesFrase.n, S.opcoesFrase.idioma);
   const p = S.frasePendente.split(" ");
+  const o = S.opcoesFrase;
+  const opcao = (acao, ativo, rotulo, dica) => `<button class="btn ${ativo ? "prim" : "sec"} opcao-frase" data-acao="${acao}" aria-pressed="${ativo}">${rotulo}<small>${dica}</small></button>`;
   tela(`
-    <h1>Suas 12 palavras</h1>
+    <h1>Suas ${p.length} palavras</h1>
     <p class="mudo">Elas SÃO a sua carteira. Anote no papel, na ordem, e guarde longe de fotos e nuvem.</p>
+    <div class="opcoes-frase" role="group" aria-label="Quantidade de palavras">
+      ${opcao("frase-12", o.n === 12, "12 palavras", "o mais comum")}
+      ${opcao("frase-24", o.n === 24, "24 palavras", "ainda mais forte")}
+    </div>
+    <div class="opcoes-frase" role="group" aria-label="Língua das palavras">
+      ${opcao("frase-en", o.idioma === "en", "Em inglês", "funciona na MetaMask e na Rabby")}
+      ${opcao("frase-pt", o.idioma === "pt", "Em português", "mais fácil de anotar; funciona na Caixa Forte")}
+    </div>
     <ol class="palavras borrado" id="palavras">${p.map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
     <button class="btn sec" data-acao="revelar">👁️ Mostrar palavras</button>
     <div class="aviso">Nunca digite essas palavras em sites ou mensagens. Ninguém do BRLS vai pedir.</div>
@@ -544,7 +556,7 @@ TELAS.CRIAR_FRASE = () => {
 TELAS.CONFIRMAR_FRASE = () => {
   const pos = [];
   while (pos.length < 3) {
-    const r = crypto.getRandomValues(new Uint8Array(1))[0] % 12;
+    const r = crypto.getRandomValues(new Uint8Array(1))[0] % S.frasePendente.split(" ").length;
     if (!pos.includes(r)) pos.push(r);
   }
   pos.sort((a, b) => a - b);
@@ -558,8 +570,8 @@ TELAS.CONFIRMAR_FRASE = () => {
 };
 
 TELAS.RESTAURAR = () => tela(`
-  <h1>Restaurar carteira</h1><p class="mudo">Digite as 12 palavras separadas por espaço.</p>
-  <textarea id="frase" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="12 palavras"></textarea>
+  <h1>Restaurar carteira</h1><p class="mudo">Digite as suas palavras (12 ou 24), na ordem, separadas por espaço. Em português ou em inglês: o app reconhece sozinho.</p>
+  <textarea id="frase" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Palavras de recuperação"></textarea>
   <div id="msg" role="alert"></div>
   <button class="btn prim" data-acao="restaurar-ok">Continuar</button>
   <button class="btn sec" data-acao="voltar-boas-vindas">Voltar</button>`);
@@ -604,7 +616,7 @@ TELAS.BLOQUEADA = async () => {
     </div>
     <div class="deslizar"><input type="range" id="deslize" min="0" max="100" value="0" aria-label="Deslize para desbloquear"><span>Deslize para desbloquear ➜</span></div>
     ${bio ? `<button class="btn sec" data-acao="biometria">👆 Usar biometria</button>` : ""}
-    <button class="btn sec" data-acao="esqueci" style="margin-top:30px">Esqueci o PIN (restaurar com 12 palavras)</button>`);
+    <button class="btn sec" data-acao="esqueci" style="margin-top:30px">Esqueci o PIN (restaurar com as palavras)</button>`);
   const r = $("#deslize");
   const soltar = () => {
     if (Number(r.value) >= 96) pedirPin();
@@ -629,7 +641,7 @@ function primeirosPassos(pol, saldoX) {
   let escondido = false;
   try { escondido = localStorage.getItem("xbrl.guia.ok") === "1"; } catch { /* */ }
   const passos = [
-    { feito: true, titulo: "Guardar as 12 palavras", texto: "São a chave do seu dinheiro. Papel, fora do celular." },
+    { feito: true, titulo: "Guardar as suas palavras", texto: "São a chave do seu dinheiro. Papel, fora do celular." },
     { feito: pol > 0n, titulo: "Ter um pouco de POL", texto: "É a moeda que paga a taxa da rede (centavos). Quem te contratar pode mandar junto com o trabalho.", ir: "RECEBER", botao: "Ver meu endereço" },
     { feito: saldoX > 0n, titulo: "Ter BRLS", texto: "Receba por um trabalho, peça para alguém te enviar, ou troque BRZ por BRLS na Reserva.", ir: "RESERVA", botao: "Ir para a Reserva" },
     { feito: false, titulo: "Fazer o primeiro trabalho", texto: "Veja as vagas abertas ou contrate alguém. O pagamento fica travado até o fim, seguro para os dois.", ir: "TRABALHOS", botao: "Ver trabalhos" },
@@ -667,6 +679,7 @@ TELAS.INICIO = async () => {
       <button class="atalho" data-ir="RECEBER"><span>📥</span>Receber</button>
       <button class="atalho" data-ir="RESERVA"><span>🪙</span>Comprar</button>
       <button class="atalho" data-acao="modo-resgatar"><span>💵</span>Resgatar</button>
+      <button class="atalho" data-ir="CORRIDA"><span>🚗</span>Corrida</button>
       <button class="atalho" data-ir="TRABALHOS"><span>🤝</span>Trabalhos</button>
       <button class="atalho" data-ir="TANQUE"><span>⛽</span>Tanque</button>
       <button class="atalho" data-ir="EXTRATO"><span>🧾</span>Extrato</button>
@@ -1088,10 +1101,186 @@ TELAS.TRABALHOS = async () => {
     <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
       ${resumoReputacao(rep)}</div>
     <button class="btn prim" data-ir="TRABALHO_NOVO">+ Contratar alguém</button>
+    <div class="grade duas"><button class="atalho" data-ir="CORRIDA"><span>🙋</span>Pedir corrida</button><button class="atalho" data-ir="MOTORISTA"><span>🚗</span>Quero dirigir</button></div>
     ${S.imp?.Encaminhador ? `<button class="btn sec" data-acao="semgas-ler">📷 Ler pedido sem gás (de quem está sem POL)</button>` : ""}
     <div class="seg" role="group"><button data-acao="aba-meus" aria-pressed="${aba === "meus"}">Meus (${meus.length})</button><button data-acao="aba-vagas" aria-pressed="${aba === "vagas"}">Vagas (${vagas.length})</button>${arbitragens.length ? `<button data-acao="aba-arbitragens" aria-pressed="${aba === "arbitragens"}">⚖️ Árbitro (${arbitragens.length})</button>` : ""}</div>
     ${lista.map(card).join("") || `<p class="mudo">Nada por aqui ainda.</p>`}`);
 };
+
+// ---------- Corrida (trabalho presencial com vaga aberta; ver corrida.js) ----------
+const minhasCorridas = (meus) => meus.filter((t) => lerCorrida(t.descricao) && !t.encerrado);
+function cartaoCorrida(t, souPassageiro) {
+  const c = lerCorrida(t.descricao);
+  return `<button class="item corrida" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${souPassageiro ? "Você pediu" : "Você dirige"}${c.pessoas > 1 ? ` · ${c.pessoas} pessoas` : ""}${c.obs ? ` · ${esc(c.obs)}` : ""}</span></span><b>${fmt(t.valor)}</b></button>`;
+}
+
+TELAS.CORRIDA = async () => {
+  if (!S.escrow) return tela(`<h1>Corrida</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
+  S.corrida ||= { veiculo: "carro", pessoas: 1, validade: 2 };
+  const v = S.corrida.veiculo;
+  tela(`
+    <h1>🚗 Corrida</h1>
+    <div id="corridas-ativas"><div class="cartao"><div class="giro"></div><p class="mudo">Lendo suas corridas…</p></div></div>
+    <div class="cartao">
+      <h2 style="margin-top:0">Pedir uma corrida</h2>
+      <div class="grade duas" role="group" aria-label="Veículo">${Object.values(VEICULOS).map((x) => `<button class="atalho" data-acao="cor-veiculo-${x.id}" aria-pressed="${x.id === v}"><span>${x.icone}</span>${x.nome}</button>`).join("")}</div>
+      <label for="cor-de">🟢 Bairro de embarque (público)</label><input id="cor-de" maxlength="40" placeholder="Ex.: Savassi, Belo Horizonte" value="${esc(S.corrida.de || "")}">
+      <label for="cor-de-end">Endereço exato do embarque (privado)</label><input id="cor-de-end" maxlength="120" placeholder="Rua, número, referência" value="${esc(S.corrida.deEnd || "")}">
+      <label for="cor-para">🏁 Bairro de destino (público)</label><input id="cor-para" maxlength="40" placeholder="Ex.: Centro, Belo Horizonte" value="${esc(S.corrida.para || "")}">
+      <label for="cor-para-end">Endereço exato do destino (privado)</label><input id="cor-para-end" maxlength="120" placeholder="Rua, número, referência" value="${esc(S.corrida.paraEnd || "")}">
+      ${VEICULOS[v].maxPessoas > 1 ? `<label for="cor-pessoas">Quantas pessoas</label><select id="cor-pessoas">${[1, 2, 3, 4].map((n) => `<option ${n === S.corrida.pessoas ? "selected" : ""}>${n}</option>`).join("")}</select>` : ""}
+      <label for="cor-obs">Observação (opcional, pública)</label><input id="cor-obs" maxlength="60" placeholder="Ex.: mala grande, pet pequeno" value="${esc(S.corrida.obs || "")}">
+      <label for="cor-valor">Quanto você paga pela corrida (BRLS)</label><input id="cor-valor" class="grande" inputmode="decimal" placeholder="0,00" value="${esc(S.corrida.valor || "")}">
+      <p class="mudo">Preço fechado: você decide antes, o motorista aceita ou não. Não muda no caminho.</p>
+      <details><summary>Mais opções</summary>
+        <label for="cor-validade">O pedido vale por</label><select id="cor-validade">${VALIDADES_HORAS.map((h) => `<option value="${h}" ${h === S.corrida.validade ? "selected" : ""}>${h} hora${h > 1 ? "s" : ""}</option>`).join("")}</select>
+        <label for="cor-kit">⛽ Gás para o motorista (POL)</label><input id="cor-kit" inputmode="decimal" value="${esc(S.corrida.kit ?? "0,3")}">
+        <p class="mudo">Chega ao motorista quando você aprovar ele, para ele nunca travar por falta de taxa. Se ninguém fizer a corrida, volta para você.</p>
+      </details>
+      <div class="ok">🔒 Os endereços exatos <b>não</b> vão para a blockchain: só o motorista que você aprovar recebe, pela conversa cifrada. Ninguém vê sua localização: o app não usa GPS.</div>
+      ${botaoSegurar("travar o pagamento e pedir", "pedir-corrida")}
+      <p class="mudo">O valor fica travado no contrato até o fim da corrida. Se ninguém aceitar no prazo, você pega de volta. Taxa de 0,1% só quando o motorista recebe.</p>
+    </div>
+    <button class="btn sec" data-ir="MOTORISTA">🚗 Sou motorista: ver pedidos</button>`);
+  // Guarda o que a pessoa digita (se a tela for redesenhada, nada se perde)
+  for (const [id, k] of [["cor-de", "de"], ["cor-de-end", "deEnd"], ["cor-para", "para"], ["cor-para-end", "paraEnd"], ["cor-obs", "obs"], ["cor-valor", "valor"], ["cor-kit", "kit"]]) {
+    $(`#${id}`)?.addEventListener("input", (ev) => (S.corrida[k] = ev.target.value));
+  }
+  $("#cor-pessoas")?.addEventListener("change", (ev) => (S.corrida.pessoas = Number(ev.target.value)));
+  $("#cor-validade")?.addEventListener("change", (ev) => (S.corrida.validade = Number(ev.target.value)));
+  atualizarCorridasAtivas();
+  vigiar("CORRIDA", atualizarCorridasAtivas, 12000);
+};
+
+async function atualizarCorridasAtivas() {
+  const box = $("#corridas-ativas");
+  if (!box) return;
+  await S.escrow.sincronizar();
+  const { meus } = await S.escrow.listar(S.endereco);
+  if (!$("#corridas-ativas")) return;
+  const ativas = minhasCorridas(meus);
+  if (!ativas.length) { box.innerHTML = ""; return; }
+  const eu = S.endereco.toLowerCase();
+  const itens = await Promise.all(ativas.slice(0, 5).map(async (r) => {
+    const t = await S.escrow.detalhe(r.id).catch(() => null);
+    if (!t || t.estado >= 4) return "";
+    const souP = t.cliente.toLowerCase() === eu;
+    return `<div class="cartao corrida-ativa">${cartaoCorrida({ ...r, valor: t.valor }, souP)}<p class="passo-corrida">${esc(passoCorrida(t, souP).texto)}</p></div>`;
+  }));
+  box.innerHTML = itens.join("") ? `<h2>Em andamento</h2>${itens.join("")}` : "";
+}
+
+/** Repete `fn` a cada `ms` enquanto a tela `nome` estiver aberta e o app visível (sem redesenhar a tela toda). */
+function vigiar(nome, fn, ms) {
+  clearInterval(S.vigia);
+  S.vigia = setInterval(() => {
+    if (S.tela !== nome) return clearInterval(S.vigia);
+    if (document.hidden || $("#modal")?.hidden === false) return;
+    fn().catch(() => {});
+  }, ms);
+}
+
+TELAS.MOTORISTA = async () => {
+  if (!S.escrow) return tela(`<h1>Motorista</h1><div class="aviso">Protocolo ainda não implantado nesta rede.</div>`);
+  S.motorista ||= { filtro: "todos", vistos: null };
+  const f = S.motorista.filtro;
+  const rep = await S.escrow.reputacao(S.endereco);
+  tela(`
+    <h1>🚗 Pedidos de corrida</h1>
+    <div class="cartao"><div class="linha"><span>Sua reputação</span><span>${estrelasNivel(rep.nivel)} <b>${esc(rep.nomeNivel)}</b></span></div>
+      <p class="mudo">Passageiros escolhem pela reputação. Cada corrida concluída e bem avaliada sobe o seu nível.</p></div>
+    <div class="seg" role="group" aria-label="Veículo">${[["todos", "Todos"], ["carro", "🚗 Carro"], ["moto", "🏍️ Moto"]].map(([k, n]) => `<button data-acao="mot-filtro-${k}" aria-pressed="${k === f}">${n}</button>`).join("")}</div>
+    <p class="mudo" id="mot-status">Procurando pedidos… deixe esta tela aberta: ela atualiza sozinha e avisa com vibração quando chega pedido novo.</p>
+    <div id="mot-lista"><div class="giro"></div></div>
+    <div id="mot-minhas"></div>
+    <div class="aviso">Antes de aceitar: o passageiro paga o que está escrito, preço fechado. O dinheiro já está travado no contrato. Você recebe no destino com o código que o passageiro mostra.</div>`);
+  atualizarPedidos();
+  vigiar("MOTORISTA", atualizarPedidos, 10000);
+};
+
+async function atualizarPedidos() {
+  if (!$("#mot-lista")) return;
+  await S.escrow.sincronizar();
+  const { meus, vagas } = await S.escrow.listar(S.endereco);
+  const box = $("#mot-lista");
+  if (!box) return;
+  const f = S.motorista.filtro;
+  const pedidos = vagas.filter((t) => { const c = lerCorrida(t.descricao); return c && (f === "todos" || c.veiculo === f); });
+  const ids = new Set(pedidos.map((t) => String(t.id)));
+  const novos = S.motorista.vistos ? [...ids].filter((id) => !S.motorista.vistos.has(id)) : [];
+  S.motorista.vistos = ids;
+  if (novos.length) avisarNovoPedido();
+  box.innerHTML = pedidos.map((t) => {
+    const c = lerCorrida(t.descricao);
+    return `<button class="item corrida" data-trabalho="${esc(t.id)}"><span class="ic">${c.icone}</span><span class="meio"><b>${esc(c.de)} → ${esc(c.para)}</b><span class="mudo">${c.pessoas > 1 ? `${c.pessoas} pessoas · ` : ""}${c.obs ? `${esc(c.obs)} · ` : ""}vale até ${new Date(t.prazo * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span></span><b>${fmt(t.valor)}</b></button>`;
+  }).join("") || `<div class="cartao"><p class="mudo">Nenhum pedido agora. Assim que alguém pedir, aparece aqui.</p></div>`;
+  const st = $("#mot-status");
+  if (st) st.textContent = `Atualizado às ${new Date().toLocaleTimeString("pt-BR")}. ${pedidos.length} pedido${pedidos.length === 1 ? "" : "s"}.`;
+  const minhas = minhasCorridas(meus).filter((t) => t.cliente.toLowerCase() !== S.endereco.toLowerCase());
+  const mb = $("#mot-minhas");
+  if (mb) mb.innerHTML = minhas.length ? `<h2>Suas corridas</h2>${minhas.map((t) => cartaoCorrida(t, false)).join("")}` : "";
+}
+
+function avisarNovoPedido() {
+  try { navigator.vibrate?.([120, 60, 120]); } catch { /* sem vibração */ }
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.08, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.35);
+    o.connect(g).connect(ac.destination);
+    o.start();
+    o.stop(ac.currentTime + 0.35);
+  } catch { /* sem som */ }
+  toast("🚗 Pedido de corrida novo!");
+}
+
+async function pedirCorrida() {
+  const r = S.corrida;
+  const ler = (id) => ($(`#${id}`)?.value || "").trim();
+  const de = ler("cor-de"), para = ler("cor-para"), deEnd = ler("cor-de-end"), paraEnd = ler("cor-para-end");
+  if (de.length < 3 || para.length < 3) throw new Error("Informe o bairro de embarque e o de destino");
+  if (deEnd.length < 6 || paraEnd.length < 6) throw new Error("Informe o endereço exato do embarque e do destino: só o motorista aprovado vai ver");
+  const valor = lerValor(ler("cor-valor"), 18);
+  if (valor === 0n) throw new Error("Informe quanto você paga pela corrida");
+  const [saldoX, saldoPol] = await Promise.all([c("xBRL").balanceOf(S.endereco), S.provider.getBalance(S.endereco)]);
+  if (saldoX < valor) throw new Error(`Você tem ${fmt(saldoX)} BRLS e a corrida é ${fmt(valor)}. Pegue BRLS na aba Reserva e tente de novo.`);
+  const kit = S.imp.Encaminhador ? lerValor(ler("cor-kit") || "0", 18) : 0n;
+  if (kit > E.parseEther("5")) throw new Error("O gás para o motorista pode ser no máximo 5 POL");
+  if (saldoPol < kit + E.parseEther("0.05")) throw new Error(`Você tem ${fmt(saldoPol, 18, 3)} POL: não dá para deixar ${fmt(kit, 18, 3)} de gás e ainda pagar a taxa. Diminua o gás em "Mais opções".`);
+  const palavras = valor >= E.parseEther("1000") ? 6 : 5;
+  const codigo = gerarCodigoEntrega(palavras); // mostrado ao motorista no destino
+  const codigoHash = hashCodigo(S.imp.EscrowTrabalho, S.endereco, codigo);
+  guardarCodigo(codigoHash, codigo);
+  const chegada = gerarCodigoEntrega(palavras); // exigido pelo contrato; na corrida o passageiro confirma o embarque com um toque
+  const chegadaHash = hashChegada(S.imp.EscrowTrabalho, S.endereco, chegada);
+  guardarCodigo(chegadaHash, chegada);
+  const horas = VALIDADES_HORAS.includes(Number(r.validade)) ? Number(r.validade) : 2;
+  const p = {
+    modalidade: 0,
+    trabalhador: E.ZeroAddress,
+    valor,
+    prazo: BigInt(agora() + horas * 3600),
+    etapas: 1,
+    codigoHash,
+    chegadaHash,
+    arbitroCliente: E.ZeroAddress,
+    desempateCriador: false,
+    caucao: 0n,
+    devolucaoHash: E.ZeroHash,
+    descricao: descricaoCorrida({ veiculo: r.veiculo, de, para, pessoas: r.pessoas, obs: ler("cor-obs") }),
+  };
+  try { localStorage.setItem(`xbrl.endereco.${chegadaHash}`, enderecoCorrida(deEnd, paraEnd)); } catch { /* sem armazenamento */ }
+  await executar("Pedir corrida", [passoAprovar(S.imp.xBRL, S.imp.EscrowTrabalho, valor, "Autorizar BRLS"), { rotulo: "Travar pagamento", fn: (o) => c("EscrowTrabalho", true).criarTrabalho(p, { ...o, value: kit }) }]);
+  S.corrida = { veiculo: r.veiculo, pessoas: 1, validade: r.validade };
+  modal(`<h2>✅ Corrida pedida</h2>
+    <p>O pagamento está travado. Deixe o app aberto: quando um motorista se candidatar, você vê a reputação dele e aprova.</p>
+    <p><b>🔑 Código do destino</b> — mostre ao motorista <b>só quando chegar</b>. Com ele, o motorista recebe:</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>
+    <p class="mudo">O código também fica salvo na tela da corrida.</p><button class="btn prim" data-acao="fechar-modal">Entendi</button>`);
+  ir("CORRIDA");
+}
 
 TELAS.TRABALHO_NOVO = () => {
   const m = Number(S.params.modalidade ?? 0);
@@ -1128,11 +1317,13 @@ TELAS.TRABALHO = async () => {
   const t = await S.escrow.detalhe(id);
   const resumo = S.escrow.resumoTrabalhos().get(String(id));
   const m = ESCROW.modalidades[t.modalidade];
-  const acoes = S.escrow.acoesPossiveis(t, S.endereco);
+  const cor = t.modalidade === 0 ? lerCorrida(resumo?.descricao) : null; // corrida de carro/moto
+  // Na corrida o passageiro confirma o embarque com um toque (o código de chegada fica guardado)
+  const acoes = S.escrow.acoesPossiveis(t, S.endereco).filter((a) => !(cor && a === "confirmarChegada"));
   const [rc, rt] = await Promise.all([S.escrow.reputacao(t.cliente), t.trabalhador !== E.ZeroAddress ? S.escrow.reputacao(t.trabalhador) : null]);
   const souCliente = t.cliente.toLowerCase() === S.endereco.toLowerCase();
   const codigo = souCliente && t.codigoHash !== E.ZeroHash ? codigoGuardado(t.codigoHash) : null;
-  const chegada = souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
+  const chegada = !cor && souCliente && t.chegadaHash !== E.ZeroHash && !t.chegou ? codigoGuardado(t.chegadaHash) : null;
   const devolucao = souCliente && t.caucaoTravada ? codigoGuardado(t.devolucaoHash) : null;
   const meuPol = await S.provider.getBalance(S.endereco).catch(() => 10n ** 18n);
   const semPol = meuPol < 10n ** 16n && !!S.imp.Encaminhador;
@@ -1162,18 +1353,27 @@ TELAS.TRABALHO = async () => {
     resolverPorTempo: t.propostaArbCliente && t.propostaArbTrabalhador ? "executar a média dos árbitros" : "executar divisão 50/50",
     chegadaPeloCliente: "confirmar que o trabalhador chegou",
   };
+  const NOME = cor ? { cliente: "Passageiro", trab: "Motorista", candidato: "Motorista candidato" } : { cliente: "Cliente", trab: "Trabalhador", candidato: "Candidato" };
+  if (cor) Object.assign(ROTULOS, {
+    aceitar: "quero fazer esta corrida", cancelar: "cancelar a corrida e reaver o valor", aprovarCandidato: "aprovar este motorista",
+    recusarCandidato: "recusar este motorista", retirarCandidatura: "desistir da corrida", chegadaPeloCliente: "confirmar: entrei no veículo",
+    liberar: "pagar o motorista agora", desistir: "desistir da corrida (devolve ao passageiro)",
+    marcarEntregue: "marcar a corrida como feita (recebe em 3 dias se o passageiro não pagar antes)",
+  });
   tela(`
-    <h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
-    <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>
+    ${cor ? `<h1>${cor.icone} Corrida: ${esc(cor.de)} → ${esc(cor.para)}</h1>
+    <p class="mudo">#${esc(t.id)} · ${cor.veiculo === "moto" ? "Moto" : "Carro"}${cor.pessoas > 1 ? ` · ${cor.pessoas} pessoas` : ""}${cor.obs ? ` · ${esc(cor.obs)}` : ""} · <span class="selo">${esc(t.estadoNome)}</span></p>
+    <div class="ok passo-corrida">${esc(passoCorrida(t, souCliente).texto)}</div>` : `<h1>${m.icone} ${esc(resumo?.descricao || m.nome)}</h1>
+    <p class="mudo">#${esc(t.id)} · ${esc(m.nome)} · <span class="selo">${esc(t.estadoNome)}</span></p>`}
     <div class="cartao">
       <div class="linha"><span>Valor</span><b>${fmt(t.valor)} BRLS</b></div>
       <div class="linha"><span>Já pago</span><b>${fmt(t.pago)} BRLS</b></div>
       ${t.etapas > 1 ? `<div class="linha"><span>Etapas pagas</span><b>${t.etapasPagas} de ${t.etapas}</b></div>` : ""}
       <div class="linha"><span>Prazo</span><b>${new Date(t.prazo * 1000).toLocaleString("pt-BR")}</b></div>
-      <div class="linha"><span>Cliente</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)} <small class="mudo">${Number(rc.contrapartes)} ${Number(rc.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rc.idadeDias} dias</small></span></div>
-      <div class="linha"><span>${t.pendenteAprovacao ? "Candidato" : "Trabalhador"}</span><span>${t.trabalhador === E.ZeroAddress ? "vaga aberta" : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)} ${rt ? `<small class="mudo">${Number(rt.contrapartes)} ${Number(rt.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rt.idadeDias} dias</small>` : ""}`}</span></div>
+      <div class="linha"><span>${NOME.cliente}</span><span>${esc(curto(t.cliente))} ${estrelasNivel(rc.nivel)} <small class="mudo">${Number(rc.contrapartes)} ${Number(rc.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rc.idadeDias} dias</small></span></div>
+      <div class="linha"><span>${t.pendenteAprovacao ? NOME.candidato : NOME.trab}</span><span>${t.trabalhador === E.ZeroAddress ? (cor ? "procurando motorista" : "vaga aberta") : `${esc(curto(t.trabalhador))} ${estrelasNivel(rt.nivel)} ${rt ? `<small class="mudo">${Number(rt.contrapartes)} ${Number(rt.contrapartes) === 1 ? "pessoa" : "pessoas"} · ${rt.idadeDias} dias</small>` : ""}`}</span></div>
       ${t.pendenteAprovacao ? `<div class="linha"><span>Situação</span><b>aguardando o cliente aprovar</b></div>` : ""}
-      ${t.modalidade === 0 ? `<div class="linha"><span>Chegada</span>${t.chegou ? '<span class="selo verde">confirmada com código</span>' : "<b>aguardando</b>"}</div>` : ""}
+      ${t.modalidade === 0 ? `<div class="linha"><span>${cor ? "Embarque" : "Chegada"}</span>${t.chegou ? `<span class="selo verde">${cor ? "passageiro embarcou" : "confirmada com código"}</span>` : "<b>aguardando</b>"}</div>` : ""}
       ${t.estado === 2 ? `<div class="linha"><span>Pagamento automático em</span><b>${new Date((t.entregueEm + ESCROW.prazoRevisaoDias * 86400) * 1000).toLocaleString("pt-BR")}</b></div>` : ""}
       ${t.estado === 3 ? `<div class="linha"><span>Propostas (ao trabalhador)</span><b>cliente ${t.propostaCliente ? (t.propostaCliente - 1) / 100 + "%" : "—"} · trabalhador ${t.propostaTrabalhador ? (t.propostaTrabalhador - 1) / 100 + "%" : "—"}</b></div>` : ""}
       ${t.kitGas > 0n ? `<div class="linha"><span>⛽ Gás para o trabalhador</span><b>${fmt(t.kitGas, 18, 3)} POL (chega quando o trabalho for confirmado)</b></div>` : ""}
@@ -1190,12 +1390,12 @@ TELAS.TRABALHO = async () => {
     ${!souCliente && souParte && (t.modalidade === 0 || t.modalidade === 1) && t.estado === 1 ? `<p class="mudo">📍 O endereço completo chega na 💬 conversa deste trabalho.</p>` : ""}
     ${(souParte || souArbitro || (t.desempateCriador && S.endereco.toLowerCase() === CREATOR_TREASURY.toLowerCase())) && t.trabalhador !== z ? `<button class="btn sec" data-acao="abrir-chat">💬 Conversar com ${souCliente ? "o trabalhador" : souArbitro ? "as partes" : "o cliente"}</button>` : ""}
     ${chegada ? `<h2>📍 Código de chegada</h2><p class="mudo">Deixe no local ou mostre ao trabalhador quando ele chegar.</p>${qrSvg(chegada)}<div class="codigo">${esc(chegada)}</div>` : ""}
-    ${codigo ? `<h2>🔑 Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</h2><p class="mudo">Entregue só a quem recebe, na hora da entrega.</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
+    ${codigo ? `<h2>🔑 ${cor ? "Código do destino" : `Código de ${t.modalidade === 1 ? "entrega" : "liberação"}`}</h2><p class="mudo">${cor ? "Mostre ao motorista <b>só quando chegar ao destino</b>. Com ele, o motorista recebe na hora." : "Entregue só a quem recebe, na hora da entrega."}</p>${qrSvg(codigo)}<div class="codigo">${esc(codigo)}</div>` : ""}
     ${devolucao ? `<details class="cartao"><summary><b>↩️ Código de devolução</b> (só se a mercadoria voltar para você)</summary><p class="mudo">Entregue ao entregador <b>somente</b> quando ele devolver a mercadoria em suas mãos. Com ele, você recebe o pagamento de volta e ele recupera a caução.</p>${qrSvg(devolucao)}<div class="codigo">${esc(devolucao)}</div></details>` : ""}
     ${acoes.includes("aceitar") && temArbitros ? `<label for="tr-arb">Seu árbitro para disputas (endereço 0x… de alguém de sua confiança)</label><input id="tr-arb" autocomplete="off" autocapitalize="none" placeholder="0x…">` : ""}
     ${acoes.includes("aceitar") && t.caucao > 0n ? `<div class="aviso">Ao aceitar, ${fmt(t.caucao)} BRLS da sua carteira ficam travados como caução. Eles voltam quando você usar o código de entrega (ou o de devolução, se trouxer a mercadoria de volta). <b>Nunca entregue nem devolva a mercadoria sem receber o código.</b></div>` : ""}
     ${acoes.includes("confirmarChegada") ? `<label for="tr-chegada">Cheguei: código de chegada que está no local</label><input id="tr-chegada" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-chegada">📷 Escanear QR</button>${botaoSegurar("confirmar que cheguei", "tr-chegada")}` : ""}
-    ${acoes.includes("confirmarComCodigo") ? `<label for="tr-cod">Código de ${t.modalidade === 1 ? "entrega" : "liberação"}</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-codigo">📷 Escanear QR</button>${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
+    ${acoes.includes("confirmarComCodigo") && !(cor && souCliente) ? `<label for="tr-cod">${cor ? "Chegou ao destino? Peça o código ao passageiro" : `Código de ${t.modalidade === 1 ? "entrega" : "liberação"}`}</label><input id="tr-cod" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-codigo">📷 Escanear QR</button>${botaoSegurar("confirmar com o código", "tr-codigo")}` : ""}
     ${acoes.includes("confirmarDevolucao") && !souCliente ? `<details class="cartao"><summary><b>↩️ Devolver a mercadoria</b></summary><p class="mudo">Só devolva na mão do cliente e em troca do código de devolução. Com o código, você recupera a caução.</p><label for="tr-dev">Código de devolução</label><input id="tr-dev" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="palavras do código"><button class="btn sec" data-acao="scan-devolucao">📷 Escanear QR</button>${botaoSegurar("confirmar a devolução", "tr-devolucao")}</details>` : ""}
     ${acoes.includes("arbitrar") ? `<h2>⚖️ Sua proposta como árbitro</h2><label for="tr-arbitrar">Quanto do restante vai ao trabalhador? <b id="tr-arbitrar-v">50%</b></label><input type="range" id="tr-arbitrar" min="0" max="100" value="50">${botaoSegurar("enviar proposta de árbitro", "tr-arbitrar")}<p class="mudo">Se o outro árbitro propuser o mesmo número, a divisão acontece na hora.</p>` : ""}
     ${acoes.includes("desempatar") ? `<h2>⚖️ Desempate do criador</h2><label for="tr-desempate">Ao trabalhador: <b id="tr-desempate-v">${Math.round((lim[0] + lim[1]) / 200)}%</b> (entre ${lim[0] / 100}% e ${lim[1] / 100}%)</label><input type="range" id="tr-desempate" min="${Math.ceil(lim[0] / 100)}" max="${Math.floor(lim[1] / 100)}" value="${Math.round((lim[0] + lim[1]) / 200)}">${botaoSegurar("desempatar", "tr-desempatar")}` : ""}
@@ -1249,13 +1449,13 @@ TELAS.AJUSTES = async () => {
     <h1>Ajustes</h1>
     <label for="aj-rede">Rede</label>
     <select id="aj-rede">${redes.map((r) => `<option value="${r.chainId}" ${r.chainId === S.chainId ? "selected" : ""}>${esc(r.nome)}</option>`).join("")}</select>
-    ${S.externa ? `<div class="cartao ok"><b>🔌 Conectada pela ${esc(S.externa.nome)}</b><p class="mudo">As chaves ficam na ${esc(S.externa.nome)}: é lá que você confirma cada operação, tranca a carteira e guarda as 12 palavras.</p></div>` : `
+    ${S.externa ? `<div class="cartao ok"><b>🔌 Conectada pela ${esc(S.externa.nome)}</b><p class="mudo">As chaves ficam na ${esc(S.externa.nome)}: é lá que você confirma cada operação, tranca a carteira e guarda as palavras.</p></div>` : `
     <div class="cartao">
       <div class="linha"><span>Biometria (chave no chip)</span><b>${K.temBiometria() ? "ativada" : bioDisp ? "disponível" : "indisponível"}</b></div>
       ${bioDisp && !K.temBiometria() ? `<button class="btn sec" data-acao="bio-ativar">👆 Ativar biometria</button>` : ""}
       ${K.temBiometria() ? `<button class="btn sec" data-acao="bio-desativar">Desativar biometria</button>` : ""}
     </div>
-    <button class="btn sec" data-ir="BACKUP">🔑 Ver minhas 12 palavras</button>
+    <button class="btn sec" data-ir="BACKUP">🔑 Ver minhas palavras</button>
     <button class="btn sec" data-acao="trocar-pin">🔢 Trocar PIN</button>
     <button class="btn sec" data-acao="bloquear">🔒 Bloquear agora</button>`}
     <div class="cartao">
@@ -1268,7 +1468,7 @@ TELAS.AJUSTES = async () => {
     ${S.externa ? "" : `<h2>Zona de perigo</h2>
     <label for="aj-apagar">Para apagar a carteira deste aparelho, digite APAGAR</label><input id="aj-apagar" autocomplete="off">
     <button class="btn perigo segurar" data-confirmar="apagar"><i>✋ Segure para apagar deste aparelho</i></button>
-    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as 12 palavras.</p>`}`);
+    <p class="mudo">Apagar não mexe no dinheiro: ele continua na blockchain e volta com as suas palavras.</p>`}`);
   $("#aj-rede").addEventListener("change", async (ev) => {
     const id = Number(ev.target.value);
     localStorage.setItem("xbrl.rede", String(id));
@@ -1279,9 +1479,10 @@ TELAS.AJUSTES = async () => {
 };
 
 TELAS.BACKUP = () =>
-  tecladoPin("Confirme o PIN", "Para mostrar as 12 palavras.", async (pin) => {
+  tecladoPin("Confirme o PIN", "Para mostrar as suas palavras.", async (pin) => {
     const frase = await K.abrirComPin(pin);
-    tela(`<h1>Suas 12 palavras</h1><ol class="palavras">${frase.split(" ").map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
+    const idioma = K.idiomaDaFrase(frase) === "pt" ? "em português" : "em inglês";
+    tela(`<h1>Suas ${frase.split(" ").length} palavras</h1><p class="mudo">${idioma}</p><ol class="palavras">${frase.split(" ").map((w) => `<li>${esc(w)}</li>`).join("")}</ol>
       <div class="aviso">Não tire print. Anote no papel.</div><button class="btn prim" data-ir="AJUSTES">Pronto</button>`);
   });
 
@@ -1340,9 +1541,31 @@ async function acao(nome, el) {
       fecharModal();
       if (ABERTAS.includes(S.tela)) render().catch(mostrarErro);
       return;
+    case "cor-veiculo-carro":
+    case "cor-veiculo-moto":
+      S.corrida.veiculo = nome.slice(12);
+      if (VEICULOS[S.corrida.veiculo].maxPessoas < (S.corrida.pessoas || 1)) S.corrida.pessoas = 1;
+      return render();
+    case "mot-filtro-todos":
+    case "mot-filtro-carro":
+    case "mot-filtro-moto":
+      S.motorista.filtro = nome.slice(11);
+      S.motorista.vistos = null;
+      for (const b of $$('[data-acao^="mot-filtro-"]')) b.setAttribute("aria-pressed", String(b.dataset.acao === nome));
+      return atualizarPedidos();
     case "criar":
       S.frasePendente = null;
       return ir("CRIAR_FRASE");
+    case "frase-12":
+    case "frase-24":
+    case "frase-en":
+    case "frase-pt": {
+      S.opcoesFrase ||= { n: 12, idioma: "en" };
+      if (nome === "frase-12" || nome === "frase-24") S.opcoesFrase.n = nome === "frase-24" ? 24 : 12;
+      else S.opcoesFrase.idioma = nome === "frase-pt" ? "pt" : "en";
+      S.frasePendente = null; // nova frase com a escolha (a anterior nunca foi usada)
+      return render();
+    }
     case "restaurar":
       return ir("RESTAURAR");
     case "voltar-boas-vindas":
@@ -1356,7 +1579,7 @@ async function acao(nome, el) {
       return ir("CRIAR_FRASE");
     case "conferir": {
       const p = S.frasePendente.split(" ");
-      const ok = S.params.posicoes.every((i) => $(`#w${i}`).value.trim().toLowerCase() === p[i]);
+      const ok = S.params.posicoes.every((i) => K.normalizarFrase($(`#w${i}`).value) === p[i]);
       if (!ok) {
         $("#msg").innerHTML = `<div class="erro">Alguma palavra não confere. Veja de novo a sua anotação.</div>`;
         return;
@@ -1365,15 +1588,16 @@ async function acao(nome, el) {
     }
     case "restaurar-ok": {
       const f = $("#frase").value;
-      if (!K.fraseValida(f)) {
-        $("#msg").innerHTML = `<div class="erro">Frase inválida. Confira as 12 palavras e a ordem.</div>`;
+      const problema = K.problemaDaFrase(f);
+      if (problema) {
+        $("#msg").innerHTML = `<div class="erro">${esc(problema)}</div>`;
         return;
       }
       S.frasePendente = K.normalizarFrase(f);
       return ir("DEFINIR_PIN");
     }
     case "esqueci":
-      modal(`<h2>Restaurar com 12 palavras?</h2><p>Isso apaga a carteira cifrada deste aparelho. Seu dinheiro fica intacto e volta com as 12 palavras.</p>
+      modal(`<h2>Restaurar com as palavras?</h2><p>Isso apaga a carteira cifrada deste aparelho. Seu dinheiro fica intacto e volta com as suas palavras (12 ou 24).</p>
         <button class="btn perigo segurar" data-confirmar="esqueci"><i>✋ Segure para continuar</i></button><button class="btn sec" data-acao="fechar-modal">Cancelar</button>`);
       return;
     case "biometria": {
@@ -1639,6 +1863,8 @@ async function confirmar(nome) {
       return;
     case "criar-trabalho":
       return criarTrabalho();
+    case "pedir-corrida":
+      return pedirCorrida();
     case "cofre":
       return operarCofre();
     case "cofre-liquidar": {

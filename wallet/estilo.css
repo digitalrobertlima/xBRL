@@ -230,3 +230,15 @@ details.cartao summary { cursor: pointer; padding: 4px 0; }
 .janela-comprovante { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--mata-funda); }
 .janela-comprovante .btn { align-self: flex-start; }
 .janela-comprovante iframe { flex: 1; width: 100%; border: 1px solid var(--gravura); border-radius: 12px; background: var(--mata); }
+
+/* Escolha das palavras ao criar a carteira (12/24, inglês/português) */
+.opcoes-frase { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+.opcoes-frase .opcao-frase { margin: 0; display: grid; gap: 2px; padding: 10px 8px; font-size: 15px; }
+.opcoes-frase .opcao-frase small { font-weight: 400; font-size: 12px; opacity: .85; font-family: var(--texto, system-ui); }
+
+/* Corrida (carro/moto) */
+.item.corrida .meio b { font-family: var(--serifa); }
+.corrida-ativa { padding: 8px 10px; }
+.corrida-ativa .item { margin: 0; }
+.passo-corrida { margin: 6px 2px 0; font-size: 15px; color: var(--papel); }
+div.passo-corrida { margin: 8px 0 12px; }

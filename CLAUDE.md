@@ -44,7 +44,7 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 
 ## 4. Carteira (PWA) — regras
 - Máquina de estados em `wallet/src/app.js` (`TRANSICOES`): telas só mudam por transições declaradas; o "voltar" do aparelho não fura o bloqueio.
-- Chave: BIP-39 12 palavras (`m/44'/60'/0'/0/0`), cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
+- Chave: BIP-39 de 12 ou 24 palavras (importa 12/15/18/21/24), em inglês ou português (lista oficial, a mesma da Caixa Forte; idioma descoberto pelas palavras, `keystore.js`), caminho `m/44'/60'/0'/0/0`, cifrada AES-256-GCM; chave de dados embrulhada por PIN (PBKDF2-SHA256 600k) e opcionalmente WebAuthn **PRF** (sem PRF, sem biometria). Auto-bloqueio 5 min.
 - Mover dinheiro = **segurar para confirmar** (1,2 s). Desbloquear = **deslizar + PIN**.
 - Chegada/entrega: código em palavras ou QR (gerado no aparelho com `vendor/qrcode.mjs`, MIT; leitura via `BarcodeDetector`, com digitação como alternativa). Nunca GPS.
 - Biometria (WebAuthn PRF) oferecida logo após criar o PIN.
@@ -54,6 +54,7 @@ Endereços dos contratos do protocolo ficam em `wallet/src/deployments/<chainId>
 - Primeiros passos na tela Início até a pessoa ter POL, BRLS e fazer o primeiro trabalho.
 - **Carteira conectada** (`wallet/src/externa.js`): dentro da Caixa Forte (iframe, "ponte BRLS" por postMessage, só com a janela-mãe e a origem que respondeu) ou com MetaMask/Rabby (EIP-1193). Sem 12 palavras, PIN nem auto-bloqueio: a carteira de fora tranca e confirma. `AssinanteExterno` lê pelo RPC do BRLS e só pede `eth_sendTransaction`, `eth_signTypedData_v4`, `personal_sign` e, para a conversa, `brls_chavePublica`/`brls_segredo` (só a Caixa Forte; o segredo vem só com o X do ECDH). Protocolo espelhado em `price-monitoring/apps.js` — mudou um, muda o outro.
 - **BRLS dentro do APK da Caixa Forte** (`wallet/src/rede-ponte.js`, primeiro import de `app.js` e `comprovante.js`): o APK serve a carteira de dentro dele, na origem oficial, e a janela não tem internet. Com `?tor=ponte`, todo `fetch` para fora vira mensagem `rede` para a Caixa Forte, que pede pelo Tor (resposta `rede-resposta`); copiar vai por `copiar`. Comprovante abre dentro do app (`?tor=pai`). Sem service worker nesse modo. O APK fixa o commit do BRLS em `price-monitoring/android/brls.txt`: mudou a carteira, atualize esse arquivo e a versão da Caixa Forte para o APK novo levar.
+- **Corrida** (`wallet/src/corrida.js`, telas `CORRIDA` e `MOTORISTA`): sem contrato novo. É um trabalho PRESENCIAL com vaga aberta; a descrição pública tem só os bairros (`🚗 Corrida: A → B · N pessoas · obs`); endereço exato vai cifrado ao motorista aprovado; passageiro confirma embarque (`confirmarChegadaPeloCliente`); motorista recebe com o código do destino. Listas atualizam só a parte da tela que muda (`vigiar`), nunca redesenham o formulário.
 - Cofre (`TELAS.COFRE`): aprovação exata para depósito/quitação/liquidação; mostra saúde e preço de liquidação.
 - Implantações sem `CofreCripto`/`Mensageiro` no JSON são ignoradas (ABIs incompatíveis).
 - Tanque de gás: alvo 3,0 POL, gatilho 1,0 POL, slippage máximo 1%, aprovação exata (nunca infinita), teto de preço R$ 5 / US$ 1 por POL contra cotação falsa.
